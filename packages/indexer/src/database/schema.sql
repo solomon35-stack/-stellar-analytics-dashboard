@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     inner_transaction_signatures JSONB DEFAULT '[]',
     row_created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE -- Soft delete for GDPR compliance
 );
 
 -- Operations table
@@ -66,6 +69,9 @@ CREATE TABLE IF NOT EXISTS operations (
     details JSONB NOT NULL DEFAULT '{}',
     row_created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE -- Soft delete for GDPR compliance
 );
 
 -- Accounts table
@@ -91,7 +97,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     num_sponsored INTEGER NOT NULL DEFAULT 0,
     num_sponsoring INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE -- Soft delete for GDPR compliance
 );
 
 -- Assets table
@@ -118,6 +125,7 @@ CREATE TABLE IF NOT EXISTS trustlines (
     is_clawback_enabled BOOLEAN DEFAULT FALSE,
     last_modified_ledger INTEGER NOT NULL,
     sponsor VARCHAR(56),
+    deleted_at TIMESTAMP WITH TIME ZONE, -- Soft delete for GDPR compliance
     UNIQUE(account_id, asset_id)
 );
 
@@ -132,7 +140,8 @@ CREATE TABLE IF NOT EXISTS network_metrics (
     total_volume VARCHAR(32) NOT NULL DEFAULT '0',
     average_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
     success_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE -- Soft delete for GDPR compliance
 );
 
 -- Asset metrics table
@@ -150,6 +159,7 @@ CREATE TABLE IF NOT EXISTS asset_metrics (
     market_cap VARCHAR(32),
     holders INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE, -- Soft delete for GDPR compliance
     UNIQUE(asset_id, timestamp)
 );
 
@@ -169,6 +179,7 @@ CREATE TABLE IF NOT EXISTS account_metrics (
     trustlines INTEGER NOT NULL DEFAULT 0,
     signers INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE, -- Soft delete for GDPR compliance
     UNIQUE(account_id, timestamp)
 );
 
@@ -184,6 +195,9 @@ CREATE INDEX IF NOT EXISTS idx_operations_type ON operations(type);
 CREATE INDEX IF NOT EXISTS idx_operations_ledger ON operations(ledger_sequence);
 CREATE INDEX IF NOT EXISTS idx_operations_created_at ON operations(created_at);
 CREATE INDEX IF NOT EXISTS idx_accounts_last_modified ON accounts(last_modified_ledger);
+CREATE INDEX IF NOT EXISTS idx_accounts_deleted ON accounts(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_deleted ON transactions(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_operations_deleted ON operations(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_trustlines_account ON trustlines(account_id);
 CREATE INDEX IF NOT EXISTS idx_trustlines_asset ON trustlines(asset_id);
 CREATE INDEX IF NOT EXISTS idx_network_metrics_timestamp ON network_metrics(timestamp);
@@ -220,3 +234,23 @@ CREATE TRIGGER update_operations_updated_at BEFORE UPDATE ON operations
 
 CREATE TRIGGER update_accounts_updated_at BEFORE UPDATE ON accounts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_trustlines_updated_at BEFORE UPDATE ON trustlines
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+-- Issue #44 – Idempotency tracking table
+-- Tracks every ledger sequence that has been fully processed so re-runs are
+-- safe no-ops.  Created by IdempotencyTracker.initialize() at startup, but
+-- also included here so it is present after a fresh schema migration.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS processed_ledgers (
+    sequence        BIGINT PRIMARY KEY,
+    processed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tx_count        INTEGER NOT NULL DEFAULT 0,
+    op_count        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_ledgers_processed_at
+    ON processed_ledgers (processed_at DESC);

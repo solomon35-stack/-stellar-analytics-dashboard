@@ -76,8 +76,11 @@ class IndexerApp {
 
   private startHealthCheckServer(): void {
     const http = require('http');
-    
+    // Import metrics lazily to avoid circular-init issues
+    const { metrics } = require('./metrics/IndexerMetrics');
+
     const server = http.createServer(async (req: any, res: any) => {
+      // ── GET /health ──────────────────────────────────────────────────────
       if (req.url === '/health') {
         try {
           const status = await this.indexerService.getStatus();
@@ -85,20 +88,34 @@ class IndexerApp {
           res.end(JSON.stringify({
             status: 'healthy',
             timestamp: new Date().toISOString(),
-            ...status
+            ...status,
           }));
-        } catch (error) {
+        } catch (error: any) {
           res.writeHead(503, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             status: 'unhealthy',
             timestamp: new Date().toISOString(),
-            error: error.message
+            error: error.message,
           }));
         }
+
+      // ── GET /metrics  (Issue #43 – Prometheus) ───────────────────────────
       } else if (req.url === '/metrics') {
-        // Basic metrics endpoint
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('# HELP stellar_indexer_status Status of the Stellar indexer\n# TYPE stellar_indexer_status gauge\nstellar_indexer_status 1\n');
+        try {
+          const metricsText = await metrics.getMetricsText();
+          res.writeHead(200, { 'Content-Type': metrics.contentType() });
+          res.end(metricsText);
+        } catch (error: any) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end(`Error collecting metrics: ${error.message}`);
+        }
+
+      // ── POST /circuit-breaker/reset  (Issue #41 – manual reset) ─────────
+      } else if (req.url === '/circuit-breaker/reset' && req.method === 'POST') {
+        this.indexerService.resetCircuitBreaker();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'Circuit breaker reset to CLOSED', timestamp: new Date().toISOString() }));
+
       } else {
         res.writeHead(404);
         res.end();
@@ -108,6 +125,9 @@ class IndexerApp {
     const port = process.env.PORT || 3001;
     server.listen(port, () => {
       console.log(`📊 Health check server listening on port ${port}`);
+      console.log(`   GET  http://localhost:${port}/health`);
+      console.log(`   GET  http://localhost:${port}/metrics`);
+      console.log(`   POST http://localhost:${port}/circuit-breaker/reset`);
     });
   }
 
