@@ -13,6 +13,13 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ): Promise<Connection<any>> => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
 

@@ -11,6 +11,10 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { startTime, endTime } = args.timeRange || {};
       const cacheKey = `networkMetrics:${startTime || 'all'}:${endTime || 'all'}`;
 
@@ -74,6 +78,16 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.filter) {
+        ValidationService.validateAssetFilter(args.filter);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { first = 50 } = args.pagination || {};
       const { assetType, assetCode, assetIssuer } = args.filter || {};
       const { startTime, endTime } = args.timeRange || {};
@@ -159,6 +173,11 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      ValidationService.validateAddress(args.accountId);
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { accountId } = args;
       const { startTime, endTime } = args.timeRange || {};
 

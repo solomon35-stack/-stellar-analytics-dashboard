@@ -19,6 +19,16 @@ export const transactionResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+      if (args.filter) {
+        ValidationService.validateTransactionFilter(args.filter);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
       const { successful, minFee, maxFee, hasMemo, memoType } = args.filter || {};
