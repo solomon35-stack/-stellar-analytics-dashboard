@@ -25,7 +25,8 @@ CREATE TABLE operations (
   tx_hash TEXT NOT NULL REFERENCES transactions(hash),
   type TEXT NOT NULL,
   source_account TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_operation_id UNIQUE (id)
 );
 
 CREATE TABLE payments (
@@ -34,7 +35,8 @@ CREATE TABLE payments (
   "to" TEXT NOT NULL,
   amount TEXT NOT NULL,
   asset TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_payment_id UNIQUE (id)
 );
 
 CREATE INDEX idx_ledgers_closed_at ON ledgers(closed_at);
@@ -42,6 +44,25 @@ CREATE INDEX idx_transactions_ledger_sequence ON transactions(ledger_sequence);
 CREATE INDEX idx_transactions_source_account ON transactions(source_account);
 CREATE INDEX idx_operations_tx_hash ON operations(tx_hash);
 CREATE INDEX idx_operations_type ON operations(type);
+CREATE INDEX idx_operations_source_account ON operations(source_account);
 CREATE INDEX idx_payments_from ON payments("from");
 CREATE INDEX idx_payments_to ON payments("to");
 CREATE INDEX idx_payments_created_at ON payments(created_at);
+
+-- Composite unique constraints for data integrity
+CREATE UNIQUE INDEX IF NOT EXISTS unique_ledger_hash ON ledgers(hash);
+CREATE UNIQUE INDEX IF NOT EXISTS unique_tx_source_time ON transactions(source_account, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS unique_op_tx_type_source ON operations(tx_hash, type, source_account);
+
+-- Data retention policies
+-- Retention periods in days
+-- Network stats and ledgers: 365 days
+-- Transactions and operations: 180 days
+-- Payments: 90 days
+-- Accounts: retained indefinitely (updated, not recreated)
+
+-- Archival tables for old data
+CREATE TABLE IF NOT EXISTS ledgers_archive (LIKE ledgers INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS transactions_archive (LIKE transactions INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS operations_archive (LIKE operations INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS payments_archive (LIKE payments INCLUDING ALL);
