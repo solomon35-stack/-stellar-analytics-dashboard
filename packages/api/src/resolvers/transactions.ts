@@ -1,5 +1,6 @@
 import { GraphQLResolveInfo } from 'graphql';
 import { db } from '../database/connection';
+import { ValidationService } from '../services/validation';
 
 export const transactionResolvers = {
   Query: {
@@ -19,6 +20,16 @@ export const transactionResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+      if (args.filter) {
+        ValidationService.validateTransactionFilter(args.filter);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
       const { successful, minFee, maxFee, hasMemo, memoType } = args.filter || {};
@@ -145,6 +156,8 @@ export const transactionResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      ValidationService.validateHash(args.hash);
+
       const transaction = await db.queryOne(
         `SELECT 
           id, paging_token, successful, hash, ledger_sequence, created_at,

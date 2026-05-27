@@ -1,5 +1,6 @@
 import { GraphQLResolveInfo } from 'graphql';
 import { db } from '../database/connection';
+import { ValidationService } from '../services/validation';
 
 export const analyticsResolvers = {
   Query: {
@@ -11,6 +12,10 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { startTime, endTime } = args.timeRange || {};
 
       let whereClause = 'WHERE 1=1';
@@ -64,6 +69,16 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.filter) {
+        ValidationService.validateAssetFilter(args.filter);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { first = 50 } = args.pagination || {};
       const { assetType, assetCode, assetIssuer } = args.filter || {};
       const { startTime, endTime } = args.timeRange || {};
@@ -137,6 +152,11 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      ValidationService.validateAddress(args.accountId);
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { accountId } = args;
       const { startTime, endTime } = args.timeRange || {};
 
@@ -254,8 +274,8 @@ export const analyticsResolvers = {
         activeAccounts7d: parseInt(activeAccounts7d.count),
         activeAccounts30d: parseInt(activeAccounts30d.count),
         volume24h: volume24h.volume,
-        volume7d: volume7h.volume,
-        volume30d: volume30h.volume,
+        volume7d: volume7d.volume,
+        volume30d: volume30d.volume,
         averageFee24h: parseFloat(averageFee24h.avg_fee) || 0,
         successRate24h: parseFloat(successRate24h.success_rate) || 0,
         latestLedger: latestLedger.sequence,

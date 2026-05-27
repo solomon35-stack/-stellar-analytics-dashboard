@@ -1,6 +1,24 @@
 import { GraphQLResolveInfo } from 'graphql';
 import { db } from '../database/connection';
-import { Connection, Edge, PageInfo } from '@stellar-analytics/shared';
+import { ValidationService } from '../services/validation';
+
+export interface Edge<T> {
+  cursor: string;
+  node: T;
+}
+
+export interface PageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+  endCursor: string | null;
+}
+
+export interface Connection<T> {
+  edges: Edge<T>[];
+  pageInfo: PageInfo;
+  totalCount: number;
+}
 
 export const ledgerResolvers = {
   Query: {
@@ -13,6 +31,13 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ): Promise<Connection<any>> => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
 
@@ -114,6 +139,10 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (typeof args.sequence !== 'number' || args.sequence < 0) {
+        throw new Error('Invalid ledger sequence');
+      }
+
       const ledger = await db.queryOne(
         `SELECT 
           id, sequence, successful_transaction_count, failed_transaction_count,
