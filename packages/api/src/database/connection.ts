@@ -2,6 +2,14 @@ import { Pool, PoolClient } from 'pg';
 import { createClient } from 'redis';
 import winston from 'winston';
 
+// Cache TTL constants (in seconds)
+export const CACHE_TTL = {
+  NETWORK_STATS: 60,
+  LEDGER_DATA: 300,
+  ACCOUNT_STATS: 300,
+  ASSET_DATA: 300,
+} as const;
+
 export class DatabaseConnection {
   private static instance: DatabaseConnection;
   private pool: Pool;
@@ -140,6 +148,27 @@ export class DatabaseConnection {
   public async cacheExists(key: string): Promise<boolean> {
     const result = await this.redis.exists(key);
     return result === 1;
+  }
+
+  // Cache monitoring
+  public async getCacheStats(): Promise<{ keys: number; memory: string }> {
+    const keys = await this.redis.dbsize();
+    const info = await this.redis.info('memory');
+    return { keys, memory: info || 'unknown' };
+  }
+
+  public async incrementCacheMetric(metric: string): Promise<void> {
+    const today = new Date().toISOString().split('T')[0];
+    const key = `cache:${metric}:${today}`;
+    await this.redis.incr(key);
+    await this.redis.expire(key, 86400 * 7); // Keep for 7 days
+  }
+
+  public async getCacheMetrics(metric: string): Promise<number> {
+    const today = new Date().toISOString().split('T')[0];
+    const key = `cache:${metric}:${today}`;
+    const value = await this.redis.get(key);
+    return value ? parseInt(value) : 0;
   }
 }
 

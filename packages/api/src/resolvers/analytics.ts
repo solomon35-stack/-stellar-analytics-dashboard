@@ -1,6 +1,5 @@
 import { GraphQLResolveInfo } from 'graphql';
-import { db } from '../database/connection';
-import { ValidationService } from '../services/validation';
+import { db, CACHE_TTL } from '../database/connection';
 
 export const analyticsResolvers = {
   Query: {
@@ -17,6 +16,13 @@ export const analyticsResolvers = {
       }
 
       const { startTime, endTime } = args.timeRange || {};
+      const cacheKey = `networkMetrics:${startTime || 'all'}:${endTime || 'all'}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
       let whereClause = 'WHERE 1=1';
       const params: any[] = [];
@@ -42,8 +48,7 @@ export const analyticsResolvers = {
       `;
 
       const metrics = await db.query(query, params);
-
-      return metrics.map(metric => ({
+      const result = metrics.map(metric => ({
         timestamp: metric.timestamp,
         ledgerCount: metric.ledger_count,
         transactionCount: metric.transaction_count,
@@ -53,6 +58,10 @@ export const analyticsResolvers = {
         averageFee: parseFloat(metric.average_fee),
         successRate: parseFloat(metric.success_rate),
       }));
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.NETWORK_STATS);
+      return result;
     },
 
     assetMetrics: async (
@@ -82,6 +91,14 @@ export const analyticsResolvers = {
       const { first = 50 } = args.pagination || {};
       const { assetType, assetCode, assetIssuer } = args.filter || {};
       const { startTime, endTime } = args.timeRange || {};
+
+      const cacheKey = `assetMetrics:${assetType || 'all'}:${assetCode || 'all'}:${assetIssuer || 'all'}:${first}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
       let whereClause = 'WHERE 1=1';
       const params: any[] = [];
@@ -124,7 +141,7 @@ export const analyticsResolvers = {
 
       const assets = await db.query(query, params);
 
-      return assets.map(asset => ({
+      const result = assets.map(asset => ({
         asset: {
           assetType: asset.asset_type,
           assetCode: asset.asset_code,
@@ -141,6 +158,10 @@ export const analyticsResolvers = {
         marketCap: asset.market_cap,
         holders: asset.holders,
       }));
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.ASSET_DATA);
+      return result;
     },
 
     accountMetrics: async (
@@ -159,6 +180,14 @@ export const analyticsResolvers = {
 
       const { accountId } = args;
       const { startTime, endTime } = args.timeRange || {};
+
+      const cacheKey = `accountMetrics:${accountId}:${startTime || 'all'}:${endTime || 'all'}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
       let whereClause = 'WHERE account_id = $1';
       const params: any[] = [accountId];
@@ -186,7 +215,7 @@ export const analyticsResolvers = {
 
       const metrics = await db.query(query, params);
 
-      return metrics.map(metric => ({
+      const result = metrics.map(metric => ({
         accountId: metric.account_id,
         balanceNative: metric.balance_native,
         totalBalanceUsd: metric.total_balance_usd,
@@ -199,6 +228,10 @@ export const analyticsResolvers = {
         trustlines: metric.trustlines,
         signers: metric.signers,
       }));
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.ACCOUNT_STATS);
+      return result;
     },
 
     stats: async (
@@ -207,6 +240,14 @@ export const analyticsResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      const cacheKey = 'stats:latest';
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       const now = new Date();
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -264,7 +305,7 @@ export const analyticsResolvers = {
         `, [oneDayAgo]),
       ]);
 
-      return {
+      const result = {
         totalLedgers: parseInt(totalLedgers.count),
         totalTransactions: parseInt(totalTransactions.count),
         totalOperations: parseInt(totalOperations.count),
@@ -281,6 +322,10 @@ export const analyticsResolvers = {
         latestLedger: latestLedger.sequence,
         latestLedgerTime: latestLedger.closed_at,
       };
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.NETWORK_STATS);
+      return result;
     },
   },
 };
