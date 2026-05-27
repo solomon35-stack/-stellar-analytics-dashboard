@@ -13,7 +13,8 @@ import winston from 'winston';
 import { typeDefs } from './schema/typeDefs';
 import { resolvers } from './resolvers';
 import { db } from './database/connection';
-import * as loaders from './loaders';
+import { createLoaders } from './loaders';
+import { formatQueryMetricsPrometheus, getQueryMetrics } from './database/query-monitor';
 import { RealtimePublisher } from './services/realtime-publisher';
 
 // Load environment variables
@@ -89,9 +90,20 @@ class ApiServer {
     });
 
     // Metrics endpoint
-    this.app.get('/metrics', (req, res) => {
+    this.app.get('/metrics', (_req, res) => {
       res.set('Content-Type', 'text/plain');
-      res.send('# HELP graphql_server_status Status of the GraphQL server\n# TYPE graphql_server_status gauge\ngraphql_server_status 1\n');
+      res.send(
+        [
+          '# HELP graphql_server_status Status of the GraphQL server',
+          '# TYPE graphql_server_status gauge',
+          'graphql_server_status 1',
+          formatQueryMetricsPrometheus(),
+        ].join('\n')
+      );
+    });
+
+    this.app.get('/metrics/queries', (_req, res) => {
+      res.json(getQueryMetrics());
     });
   }
 
@@ -104,7 +116,7 @@ class ApiServer {
           req,
           res,
           db,
-          loaders,
+          loaders: createLoaders(),
           logger: this.logger,
         };
       },
@@ -190,7 +202,7 @@ class ApiServer {
         schema,
         context: async () => ({
           db,
-          loaders,
+          loaders: createLoaders(),
           logger: this.logger,
         }),
         onConnect: () => {

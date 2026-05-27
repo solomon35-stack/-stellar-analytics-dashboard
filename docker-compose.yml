@@ -10,7 +10,19 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./indexer/src/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./backups/wal:/var/lib/postgresql/wal_archive
+    command:
+      [
+        "postgres",
+        "-c",
+        "wal_level=replica",
+        "-c",
+        "archive_mode=on",
+        "-c",
+        "archive_timeout=60s",
+        "-c",
+        "archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f"
+      ]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stellar -d stellar_analytics"]
       interval: 10s
@@ -28,6 +40,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  postgres-backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: stellar
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: stellar_analytics
+      POSTGRES_USER: stellar
+      BACKUP_RETENTION_DAYS: 90
+      VERIFY_RESTORE: "true"
+      BACKUP_INTERVAL_SECONDS: 86400
+      BACKUP_OUTPUT_DIR: /backups/daily
+      BACKUP_ALERT_WEBHOOK: ""
+    volumes:
+      - ./scripts/backup:/scripts:ro
+      - ./backups/postgres:/backups/daily
+      - ./backups/wal:/backups/wal:ro
+    entrypoint: ["/bin/sh", "/scripts/run-postgres-backup.sh"]
+    restart: unless-stopped
 
 volumes:
   postgres_data:
