@@ -6,6 +6,8 @@ import { motion } from 'framer-motion';
 
 import { STATS_QUERY, NEW_LEDGER_SUBSCRIPTION } from '@/graphql/queries';
 import { MetricCard } from '@/components/MetricCard';
+import { TransactionsChart } from '@/components/TransactionsChart';
+import { LedgerTimelineChart } from '@/components/LedgerTimelineChart';
 import { NetworkChart } from '@/components/NetworkChart';
 import { RecentTransactions } from '@/components/RecentTransactions';
 import { TopAssets } from '@/components/TopAssets';
@@ -168,10 +170,17 @@ export function Dashboard() {
         ))}
       </div>
 
+      {/* Primary chart — full width */}
+      <TransactionsChart />
+
+      {/* Secondary charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <NetworkChart />
         <TopAssets />
       </div>
+
+      {/* Ledger timeline */}
+      <LedgerTimelineChart />
 
       <RecentTransactions />
     </div>

@@ -10,11 +10,11 @@ import {
   X,
   Moon,
   Sun,
-  Search,
   Bell,
   Database,
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { GlobalSearch } from '@/components/GlobalSearch';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -145,14 +145,9 @@ export function Layout({ children }: LayoutProps) {
 
           <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
             <div className="flex flex-1 items-center">
-              {/* Enterprise Search Input */}
-              <div className="relative w-full max-w-md group hidden sm:block">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
-                <input
-                  type="text"
-                  placeholder="Search Address / Hash / Ledger..."
-                  className="w-full bg-muted/40 border-none rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-muted-foreground/60"
-                />
+              {/* Global Search */}
+              <div className="hidden sm:block w-full max-w-md">
+                <GlobalSearch />
               </div>
             </div>
 

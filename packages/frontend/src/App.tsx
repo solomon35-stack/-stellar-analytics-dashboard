@@ -9,6 +9,7 @@ import { AccountDetail } from '@/pages/AccountDetail';
 import { TransactionDetail } from '@/pages/TransactionDetail';
 import { NotFound } from '@/pages/NotFound';
 import { Ledgers } from './pages/Ledgers';
+import { SearchPage } from './pages/Search';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/transactions/:hash" element={<TransactionDetail />} />
         <Route path="/ledgers" element={<Ledgers />} />
         <Route path="/assets" element={<Assets />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>

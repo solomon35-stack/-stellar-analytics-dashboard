@@ -1,20 +1,16 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client';
 import { format } from 'date-fns';
-import {
-  Search,
-  Wallet,
-  ArrowUpDown,
-  Download,
-  FileText,
-  Share2,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-} from 'lucide-react';
-
+import { Search, Wallet, Share2, Clock, Download, FileText } from 'lucide-react';
+import { useState } from 'react';
 import { ACCOUNTS_QUERY } from '@/graphql/queries';
+import { DataTable } from '@/components/DataTable';
+import { FilterBar, FilterRow, ToggleGroup, RangeInput } from '@/components/FilterBar';
+import { useFilterSort } from '@/hooks/useFilterSort';
+import type { FilterPreset } from '@/components/FilterBar';
+
+// ── types ─────────────────────────────────────────────────────────────────────
 
 interface Account {
   accountId: string;
@@ -32,158 +28,231 @@ interface Account {
   updatedAt: string;
 }
 
-interface AccountsData {
-  accounts: {
-    edges: Array<{
-      cursor: string;
-      node: Account;
-    }>;
-    pageInfo: {
-      hasNextPage: boolean;
-      hasPreviousPage: boolean;
-      startCursor: string | null;
-      endCursor: string | null;
-    };
-    totalCount: number;
-  };
+// ── filter defaults ───────────────────────────────────────────────────────────
+
+const DEFAULTS = {
+  search: '',
+  minBalance: '',
+  maxBalance: '',
+  isActive: '' as '' | 'true' | 'false',
+};
+
+type AccountFilters = typeof DEFAULTS;
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+function buildGqlFilter(filters: AccountFilters) {
+  const f: Record<string, unknown> = {};
+  if (filters.search) f.accountId = filters.search;
+  if (filters.minBalance) f.minBalance = filters.minBalance;
+  if (filters.maxBalance) f.maxBalance = filters.maxBalance;
+  if (filters.isActive === 'true') f.isActive = true;
+  if (filters.isActive === 'false') f.isActive = false;
+  return Object.keys(f).length ? f : undefined;
 }
 
-function formatAccountId(id: string): string {
-  if (id.length <= 12) return id;
-  return `${id.slice(0, 6)}...${id.slice(-4)}`;
+function clientSort(accounts: Account[], field: string, dir: 'asc' | 'desc') {
+  return [...accounts].sort((a, b) => {
+    let av: number | string = 0;
+    let bv: number | string = 0;
+    switch (field) {
+      case 'balance':
+        av = parseFloat(a.balance);
+        bv = parseFloat(b.balance);
+        break;
+      case 'numSubentries':
+        av = a.numSubentries;
+        bv = b.numSubentries;
+        break;
+      case 'createdAt':
+        av = new Date(a.createdAt).getTime();
+        bv = new Date(b.createdAt).getTime();
+        break;
+      case 'accountId':
+        av = a.accountId;
+        bv = b.accountId;
+        break;
+      default:
+        return 0;
+    }
+    return dir === 'asc' ? (av < bv ? -1 : 1) : av > bv ? -1 : 1;
+  });
 }
 
-function copyToClipboard(text: string): void {
-  navigator.clipboard.writeText(text);
-}
-
-function exportToCSV(data: unknown[], filename: string): void {
-  if (data.length === 0) return;
-
-  const headers = Object.keys(data[0] as Record<string, unknown>);
-  const csvContent = [
-    headers.join(','),
-    ...data.map((row) =>
-      headers
-        .map((header) => {
-          const value = (row as Record<string, unknown>)[header];
-          const stringValue = String(value ?? '');
-          return stringValue.includes(',') ? `"${stringValue}"` : stringValue;
-        })
-        .join(',')
-    ),
+function exportToCSV(data: Account[], filename: string) {
+  if (!data.length) return;
+  const keys: (keyof Account)[] = ['accountId', 'balance', 'sequenceNumber', 'numSubentries', 'createdAt'];
+  const csv = [
+    keys.join(','),
+    ...data.map((row) => keys.map((k) => `"${String(row[k] ?? '')}"`).join(',')),
   ].join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
   link.download = `${filename}.csv`;
   link.click();
 }
 
-function exportToJSON(data: unknown, filename: string): void {
-  const jsonContent = JSON.stringify(data, null, 2);
-  const blob = new Blob([jsonContent], { type: 'application/json' });
+function exportToJSON(data: Account[], filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
   link.download = `${filename}.json`;
   link.click();
 }
 
+// ── component ─────────────────────────────────────────────────────────────────
+
 export function Accounts() {
   const navigate = useNavigate();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState<'accountId' | 'balance' | 'createdAt'>('createdAt');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [cursor, setCursor] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [copied, setCopied] = useState<string | null>(null);
 
-  const { data, loading, error, refetch } = useQuery<AccountsData>(ACCOUNTS_QUERY, {
+  const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
+    useFilterSort<AccountFilters>({
+      defaults: DEFAULTS,
+      sortDefaults: { field: 'createdAt', dir: 'desc' },
+    });
+
+  const after = searchParams.get('after') ?? undefined;
+
+  const { data, loading, error, refetch } = useQuery(ACCOUNTS_QUERY, {
     variables: {
       first: 20,
-      after: cursor,
-      filter: searchTerm ? { accountId: searchTerm } : undefined,
+      after,
+      filter: buildGqlFilter(filters),
     },
     notifyOnNetworkStatusChange: true,
   });
 
-  const handleSort = (field: 'accountId' | 'balance' | 'createdAt') => {
-    if (sortField === field) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDir('asc');
+  // Refetch when filters change
+  const prevFiltersRef = useRef(filters);
+  useEffect(() => {
+    if (JSON.stringify(prevFiltersRef.current) !== JSON.stringify(filters)) {
+      prevFiltersRef.current = filters;
+      refetch({ first: 20, after: undefined, filter: buildGqlFilter(filters) });
     }
-  };
+  }, [filters, refetch]);
+
+  const rawAccounts: Account[] = data?.accounts?.edges.map((e: any) => e.node) || [];
+  const pageInfo = data?.accounts?.pageInfo;
+  const totalCount = data?.accounts?.totalCount || 0;
+
+  const sorted = clientSort(rawAccounts, sort.field, sort.dir);
 
   const handleCopy = (text: string) => {
-    copyToClipboard(text);
+    navigator.clipboard.writeText(text);
     setCopied(text);
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const handleExport = (format: 'csv' | 'json') => {
-    const accounts = data?.accounts.edges.map((e) => e.node) || [];
-    if (format === 'csv') {
-      exportToCSV(accounts, 'accounts');
-    } else {
-      exportToJSON(accounts, 'accounts');
-    }
-  };
+  // ── presets ────────────────────────────────────────────────────────────────
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setCursor(null);
-    refetch({ after: undefined, filter: searchTerm ? { accountId: searchTerm } : undefined });
-  };
+  const presets: FilterPreset[] = [
+    {
+      label: 'High balance',
+      description: 'Accounts with more than 10,000 XLM',
+      apply: () => { resetFilters(); setFilter('minBalance', '10000'); },
+    },
+    {
+      label: 'Low balance',
+      description: 'Accounts with less than 10 XLM',
+      apply: () => { resetFilters(); setFilter('maxBalance', '10'); },
+    },
+    {
+      label: 'Active accounts',
+      description: 'Recently active accounts',
+      apply: () => { resetFilters(); setFilter('isActive', 'true'); },
+    },
+    {
+      label: 'Multi-sig',
+      description: 'Accounts with multiple signers (numSubentries > 1)',
+      apply: () => { resetFilters(); setFilter('minBalance', '1'); },
+    },
+  ];
 
-  const accounts = data?.accounts.edges.map((e) => e.node) || [];
-  const pageInfo = data?.accounts.pageInfo;
-  const totalCount = data?.accounts.totalCount || 0;
+  // ── columns ────────────────────────────────────────────────────────────────
 
-  const sortedAccounts = [...accounts].sort((a, b) => {
-    let aVal: string | number = '';
-    let bVal: string | number = '';
-
-    switch (sortField) {
-      case 'accountId':
-        aVal = a.accountId;
-        bVal = b.accountId;
-        break;
-      case 'balance':
-        aVal = parseFloat(a.balance);
-        bVal = parseFloat(b.balance);
-        break;
-      case 'createdAt':
-        aVal = new Date(a.createdAt).getTime();
-        bVal = new Date(b.createdAt).getTime();
-        break;
-    }
-
-    if (sortDir === 'asc') {
-      return aVal < bVal ? -1 : 1;
-    }
-    return aVal > bVal ? -1 : 1;
-  });
+  const columns = [
+    {
+      header: 'Account ID',
+      sortField: 'accountId',
+      accessor: (account: Account) => (
+        <div className="flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="font-mono text-sm">
+            {account.accountId.slice(0, 6)}…{account.accountId.slice(-4)}
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCopy(account.accountId); }}
+            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+            title="Copy account ID"
+          >
+            {copied === account.accountId ? (
+              <span className="text-green-500 text-xs font-medium">Copied!</span>
+            ) : (
+              <Share2 className="h-3 w-3" />
+            )}
+          </button>
+        </div>
+      ),
+    },
+    {
+      header: 'Balance',
+      sortField: 'balance',
+      accessor: (account: Account) => (
+        <span className="font-medium tabular-nums">
+          {parseFloat(account.balance).toLocaleString(undefined, { maximumFractionDigits: 2 })} XLM
+        </span>
+      ),
+    },
+    {
+      header: 'Sequence',
+      accessor: (account: Account) => (
+        <span className="font-mono text-sm text-muted-foreground">{account.sequenceNumber}</span>
+      ),
+    },
+    {
+      header: 'Subentries',
+      sortField: 'numSubentries',
+      accessor: (account: Account) => (
+        <span className="tabular-nums">{account.numSubentries}</span>
+      ),
+      className: 'text-center',
+    },
+    {
+      header: 'Created',
+      sortField: 'createdAt',
+      accessor: (account: Account) => (
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <Clock className="h-3.5 w-3.5 shrink-0" />
+          <span className="text-xs">
+            {account.createdAt ? format(new Date(account.createdAt), 'MMM dd, yyyy') : '—'}
+          </span>
+        </div>
+      ),
+      className: 'text-right',
+    },
+  ];
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-5 animate-in fade-in duration-500">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Accounts</h1>
-          <p className="text-muted-foreground mt-2">Browse and analyze Stellar accounts</p>
+          <p className="text-muted-foreground mt-1">Browse and analyze Stellar accounts</p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => handleExport('csv')}
+            onClick={() => exportToCSV(sorted, 'accounts')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
             title="Export to CSV"
           >
             <Download className="h-4 w-4" />
           </button>
           <button
-            onClick={() => handleExport('json')}
+            onClick={() => exportToJSON(sorted, 'accounts')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
             title="Export to JSON"
           >
@@ -193,171 +262,78 @@ export function Accounts() {
       </div>
 
       {/* Search */}
-      <form onSubmit={handleSearch} className="flex gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search by account ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 rounded-lg border bg-card focus:outline-none focus:ring-2 focus:ring-primary"
-          />
-        </div>
-        <button
-          type="submit"
-          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
-          Search
-        </button>
-      </form>
-
-      {/* Results Count */}
-      <div className="text-sm text-muted-foreground">
-        Showing {accounts.length} of {totalCount.toLocaleString()} accounts
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <input
+          type="text"
+          placeholder="Search by account ID…"
+          value={filters.search}
+          onChange={(e) => setFilter('search', e.target.value)}
+          className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-border bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+        />
       </div>
+
+      {/* Filter bar */}
+      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+          <FilterRow label="Balance (XLM)">
+            <RangeInput
+              minValue={filters.minBalance}
+              maxValue={filters.maxBalance}
+              onMinChange={(v) => setFilter('minBalance', v)}
+              onMaxChange={(v) => setFilter('maxBalance', v)}
+              placeholder={{ min: '0', max: '∞' }}
+              unit="XLM"
+            />
+          </FilterRow>
+
+          <FilterRow label="Activity">
+            <ToggleGroup
+              options={[
+                { label: 'Any', value: '' },
+                { label: 'Active', value: 'true' },
+                { label: 'Inactive', value: 'false' },
+              ]}
+              value={filters.isActive}
+              onChange={(v) => setFilter('isActive', v as string)}
+            />
+          </FilterRow>
+        </div>
+      </FilterBar>
+
+      {/* Error */}
+      {error && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Error loading accounts: {error.message}
+        </div>
+      )}
 
       {/* Table */}
-      <div className="rounded-lg border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-accent/50">
-              <tr>
-                <th
-                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-accent"
-                  onClick={() => handleSort('accountId')}
-                >
-                  <div className="flex items-center gap-2">
-                    Account ID
-                    <ArrowUpDown className="h-4 w-4" />
-                  </div>
-                </th>
-                <th
-                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-accent"
-                  onClick={() => handleSort('balance')}
-                >
-                  <div className="flex items-center gap-2">
-                    Balance
-                    <ArrowUpDown className="h-4 w-4" />
-                  </div>
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Sequence</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Subentries</th>
-                <th
-                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-accent"
-                  onClick={() => handleSort('createdAt')}
-                >
-                  <div className="flex items-center gap-2">
-                    Created
-                    <ArrowUpDown className="h-4 w-4" />
-                  </div>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {loading ? (
-                [...Array(10)].map((_, i) => (
-                  <tr key={i}>
-                    <td colSpan={5} className="px-4 py-4">
-                      <div className="loading-skeleton h-6 w-full" />
-                    </td>
-                  </tr>
-                ))
-              ) : error ? (
-                <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-destructive">
-                    Error loading accounts: {error.message}
-                  </td>
-                </tr>
-              ) : sortedAccounts.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
-                    No accounts found
-                  </td>
-                </tr>
-              ) : (
-                sortedAccounts.map((account) => (
-                  <tr
-                    key={account.accountId}
-                    className="hover:bg-accent/50 cursor-pointer transition-colors"
-                    onClick={() => navigate(`/accounts/${account.accountId}`)}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Wallet className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-mono text-sm">
-                          {formatAccountId(account.accountId)}
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCopy(account.accountId);
-                          }}
-                          className="p-1 hover:text-foreground transition-colors"
-                        >
-                          {copied === account.accountId ? (
-                            <span className="text-green-500 text-xs">Copied!</span>
-                          ) : (
-                            <Share2 className="h-3 w-3" />
-                          )}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {parseFloat(account.balance).toLocaleString()} XLM
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="font-mono text-sm">{account.sequenceNumber}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-sm">{account.numSubentries}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Clock className="h-4 w-4" />
-                        {account.createdAt && format(new Date(account.createdAt), 'MMM dd, yyyy')}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Pagination */}
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-muted-foreground">
-          Page{' '}
-          {cursor
-            ? Math.ceil(
-                accounts.findIndex((a) => a.accountId === data?.accounts.edges[0]?.node.accountId) /
-                  20
-              ) + 1
-            : 1}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setCursor(pageInfo?.startCursor || null)}
-            disabled={!pageInfo?.hasPreviousPage}
-            className="p-2 rounded-lg border bg-card hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setCursor(pageInfo?.endCursor || null)}
-            disabled={!pageInfo?.hasNextPage}
-            className="p-2 rounded-lg border bg-card hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <DataTable
+        columns={columns}
+        data={sorted}
+        loading={loading}
+        sort={sort}
+        onSort={setSort}
+        totalCount={totalCount}
+        hasNextPage={pageInfo?.hasNextPage}
+        hasPrevPage={pageInfo?.hasPreviousPage}
+        onRowClick={(account) => navigate(`/accounts/${account.accountId}`)}
+        onNextPage={() =>
+          setSearchParams((p) => {
+            const n = new URLSearchParams(p);
+            n.set('after', pageInfo?.endCursor ?? '');
+            return n;
+          })
+        }
+        onPrevPage={() =>
+          setSearchParams((p) => {
+            const n = new URLSearchParams(p);
+            n.delete('after');
+            return n;
+          })
+        }
+      />
     </div>
   );
 }

@@ -296,13 +296,124 @@ export const ACCOUNT_METRICS_QUERY = gql`
   }
 `;
 
+export const SEARCH_ACCOUNTS_QUERY = gql`
+  query SearchAccounts($filter: AccountFilterInput) {
+    accounts(pagination: { first: 5 }, filter: $filter) {
+      edges {
+        node {
+          accountId
+          balance
+          assetType
+          sequenceNumber
+          createdAt
+        }
+      }
+      totalCount
+    }
+  }
+`;
+
+export const SEARCH_TRANSACTIONS_QUERY = gql`
+  query SearchTransactions($first: Int) {
+    transactions(pagination: { first: $first }) {
+      edges {
+        node {
+          hash
+          successful
+          ledger
+          sourceAccount
+          feeCharged
+          operationCount
+          createdAt
+        }
+      }
+      totalCount
+    }
+  }
+`;
+
+export const SEARCH_LEDGERS_QUERY = gql`
+  query SearchLedgers($first: Int) {
+    ledgers(pagination: { first: $first }) {
+      edges {
+        node {
+          sequence
+          successfulTransactionCount
+          failedTransactionCount
+          operationCount
+          closedAt
+        }
+      }
+      totalCount
+    }
+  }
+`;
+
 export const NEW_LEDGER_SUBSCRIPTION = gql`
   subscription OnNewLedger {
     ledgerAdded {
+      id
       sequence
-      closedAt
-      operationCount
       successfulTransactionCount
+      failedTransactionCount
+      operationCount
+      txSetOperationCount
+      closedAt
+      totalCoins
+      feePool
+      baseFeeInStroops
+      baseReserveInStroops
+      maxTxSetSize
+      protocolVersion
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+export const NEW_TRANSACTION_SUBSCRIPTION = gql`
+  subscription OnNewTransaction {
+    transactionAdded {
+      id
+      hash
+      successful
+      ledger
+      createdAt
+      sourceAccount
+      feeCharged
+      operationCount
+      memoType
+      memo
+    }
+  }
+`;
+
+export const TRANSACTION_FOR_ACCOUNT_SUBSCRIPTION = gql`
+  subscription OnTransactionForAccount($accountId: String!) {
+    transactionsForAccount(accountId: $accountId) {
+      id
+      hash
+      successful
+      ledger
+      createdAt
+      sourceAccount
+      feeCharged
+      operationCount
+    }
+  }
+`;
+
+export const NETWORK_METRICS_SUBSCRIPTION = gql`
+  subscription OnNetworkMetricsUpdated {
+    networkMetricsUpdated {
+      timestamp
+      ledgerCount
+      transactionCount
+      operationCount
+      activeAccounts
+      totalVolume
+      averageFee
+      successRate
     }
   }
 `;

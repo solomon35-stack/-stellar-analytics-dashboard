@@ -1,6 +1,9 @@
+import { useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client';
 import { LEDGERS_QUERY } from '@/graphql/queries';
 import { DataTable } from '@/components/DataTable';
+import { FilterBar, FilterRow, DateRangeInput, RangeInput } from '@/components/FilterBar';
 import { formatDistanceToNow } from 'date-fns';
 import {
   AreaChart,
@@ -13,26 +16,134 @@ import {
 } from 'recharts';
 import { Database, Activity, Cpu } from 'lucide-react';
 import { MetricCard } from '@/components/MetricCard';
+import { useFilterSort } from '@/hooks/useFilterSort';
+import type { FilterPreset } from '@/components/FilterBar';
+
+// ── filter defaults ───────────────────────────────────────────────────────────
+
+const DEFAULTS = {
+  startTime: '',
+  endTime: '',
+  minOps: '',
+  maxOps: '',
+};
+
+type LedgerFilters = typeof DEFAULTS;
+
+function buildTimeRange(filters: LedgerFilters) {
+  if (!filters.startTime && !filters.endTime) return undefined;
+  return {
+    startTime: filters.startTime || undefined,
+    endTime: filters.endTime || undefined,
+  };
+}
+
+function clientSort(ledgers: any[], field: string, dir: 'asc' | 'desc') {
+  return [...ledgers].sort((a, b) => {
+    let av: number = 0;
+    let bv: number = 0;
+    switch (field) {
+      case 'sequence':
+        av = a.sequence; bv = b.sequence; break;
+      case 'operationCount':
+        av = a.operationCount; bv = b.operationCount; break;
+      case 'successfulTransactionCount':
+        av = a.successfulTransactionCount; bv = b.successfulTransactionCount; break;
+      case 'closedAt':
+        av = new Date(a.closedAt).getTime(); bv = new Date(b.closedAt).getTime(); break;
+      default:
+        return 0;
+    }
+    return dir === 'asc' ? (av < bv ? -1 : 1) : av > bv ? -1 : 1;
+  });
+}
+
+// ── component ─────────────────────────────────────────────────────────────────
 
 export function Ledgers() {
-  const { data, loading, fetchMore } = useQuery(LEDGERS_QUERY, {
-    variables: { first: 20 },
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
+    useFilterSort<LedgerFilters>({
+      defaults: DEFAULTS,
+      sortDefaults: { field: 'sequence', dir: 'desc' },
+    });
+
+  const after = searchParams.get('after') ?? undefined;
+
+  const { data, loading, fetchMore, refetch } = useQuery(LEDGERS_QUERY, {
+    variables: {
+      first: 20,
+      after,
+      timeRange: buildTimeRange(filters),
+    },
     pollInterval: 5000,
   });
 
-  const ledgers = data?.ledgers?.edges.map((e: any) => e.node) || [];
-  const pageInfo = data?.ledgers?.pageInfo;
+  const prevFiltersRef = useRef(filters);
+  useEffect(() => {
+    if (JSON.stringify(prevFiltersRef.current) !== JSON.stringify(filters)) {
+      prevFiltersRef.current = filters;
+      refetch({ first: 20, after: undefined, timeRange: buildTimeRange(filters) });
+    }
+  }, [filters, refetch]);
 
-  // Real-time Chart Mapping
-  const chartData = [...ledgers].reverse().map((l: any) => ({
+  const rawLedgers = data?.ledgers?.edges.map((e: any) => e.node) || [];
+  const pageInfo = data?.ledgers?.pageInfo;
+  const totalCount = data?.ledgers?.totalCount;
+
+  // Client-side op count filter
+  const opFiltered = rawLedgers.filter((l: any) => {
+    if (filters.minOps && l.operationCount < parseInt(filters.minOps)) return false;
+    if (filters.maxOps && l.operationCount > parseInt(filters.maxOps)) return false;
+    return true;
+  });
+
+  const sorted = clientSort(opFiltered, sort.field, sort.dir);
+
+  // Chart data (always use raw, reversed for chronological order)
+  const chartData = [...rawLedgers].reverse().map((l: any) => ({
     sequence: l.sequence,
-    txCount: l.transactionCount,
+    txCount: l.successfulTransactionCount,
     ops: l.operationCount,
   }));
+
+  // ── presets ────────────────────────────────────────────────────────────────
+
+  const presets: FilterPreset[] = [
+    {
+      label: 'Last hour',
+      apply: () => {
+        resetFilters();
+        setFilter('startTime', new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 16));
+      },
+    },
+    {
+      label: 'Last 24h',
+      apply: () => {
+        resetFilters();
+        setFilter('startTime', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+      },
+    },
+    {
+      label: 'Last 7 days',
+      apply: () => {
+        resetFilters();
+        setFilter('startTime', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+      },
+    },
+    {
+      label: 'High activity (>50 ops)',
+      apply: () => { resetFilters(); setFilter('minOps', '50'); },
+    },
+  ];
+
+  // ── columns ────────────────────────────────────────────────────────────────
 
   const columns = [
     {
       header: 'Sequence',
+      sortField: 'sequence',
       accessor: (l: any) => (
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-primary/60" />
@@ -41,14 +152,25 @@ export function Ledgers() {
       ),
     },
     {
-      header: 'Tx Density',
+      header: 'Transactions',
+      sortField: 'successfulTransactionCount',
       accessor: (l: any) => (
-        <div className="flex flex-col">
-          <span className="font-semibold">{l.transactionCount} txs</span>
-          <div className="w-24 h-1 bg-muted rounded-full mt-1 overflow-hidden">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-green-500 font-semibold">{l.successfulTransactionCount}</span>
+            <span className="text-muted-foreground">/</span>
+            <span className="text-red-500 font-semibold">{l.failedTransactionCount}</span>
+            <span className="text-xs text-muted-foreground">success/fail</span>
+          </div>
+          <div className="w-24 h-1 bg-muted rounded-full overflow-hidden">
             <div
               className="h-full bg-primary"
-              style={{ width: `${Math.min((l.transactionCount / 50) * 100, 100)}%` }}
+              style={{
+                width: `${Math.min(
+                  ((l.successfulTransactionCount + l.failedTransactionCount) / 50) * 100,
+                  100
+                )}%`,
+              }}
             />
           </div>
         </div>
@@ -56,23 +178,33 @@ export function Ledgers() {
     },
     {
       header: 'Operations',
+      sortField: 'operationCount',
       accessor: (l: any) => (
-        <div className="flex items-center gap-2">
-          <span className="text-green-500 font-medium">{l.successfulOperationCount}</span>
-          <span className="text-muted-foreground">/</span>
-          <span className="text-red-500 font-medium">{l.failedOperationCount}</span>
-        </div>
+        <span className="font-medium tabular-nums">{l.operationCount}</span>
       ),
+      className: 'text-center',
     },
     {
-      header: 'Time',
-      accessor: (l: any) => formatDistanceToNow(new Date(l.closedAt), { addSuffix: true }),
+      header: 'Protocol',
+      accessor: (l: any) => (
+        <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">
+          v{l.protocolVersion}
+        </span>
+      ),
+      className: 'text-center',
+    },
+    {
+      header: 'Closed',
+      sortField: 'closedAt',
+      accessor: (l: any) =>
+        formatDistanceToNow(new Date(l.closedAt), { addSuffix: true }),
       className: 'text-right',
     },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Header */}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Ledger Chain</h1>
@@ -80,8 +212,8 @@ export function Ledgers() {
         </div>
         <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
           <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider">
             Live Syncing
@@ -89,6 +221,7 @@ export function Ledgers() {
         </div>
       </div>
 
+      {/* Chart + metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="chart-container lg:col-span-2">
           <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-6 flex items-center gap-2">
@@ -119,23 +252,64 @@ export function Ledgers() {
             </ResponsiveContainer>
           </div>
         </div>
-
         <div className="space-y-6">
           <MetricCard
             title="Latest Height"
-            value={ledgers[0]?.sequence?.toLocaleString() || '...'}
+            value={rawLedgers[0]?.sequence?.toLocaleString() || '…'}
             icon={Database}
           />
           <MetricCard title="Protocol Version" value="21" icon={Cpu} changeLabel="Active" />
         </div>
       </div>
 
+      {/* Filter bar */}
+      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+          <FilterRow label="Time range">
+            <DateRangeInput
+              startValue={filters.startTime}
+              endValue={filters.endTime}
+              onStartChange={(v) => setFilter('startTime', v)}
+              onEndChange={(v) => setFilter('endTime', v)}
+            />
+          </FilterRow>
+
+          <FilterRow label="Operations">
+            <RangeInput
+              minValue={filters.minOps}
+              maxValue={filters.maxOps}
+              onMinChange={(v) => setFilter('minOps', v)}
+              onMaxChange={(v) => setFilter('maxOps', v)}
+              placeholder={{ min: '0', max: '∞' }}
+            />
+          </FilterRow>
+        </div>
+      </FilterBar>
+
+      {/* Table */}
       <DataTable
         columns={columns}
-        data={ledgers}
+        data={sorted}
         loading={loading}
+        sort={sort}
+        onSort={setSort}
+        totalCount={totalCount}
         hasNextPage={pageInfo?.hasNextPage}
-        onNextPage={() => fetchMore({ variables: { after: pageInfo?.endCursor } })}
+        hasPrevPage={pageInfo?.hasPreviousPage}
+        onNextPage={() =>
+          setSearchParams((p) => {
+            const n = new URLSearchParams(p);
+            n.set('after', pageInfo?.endCursor ?? '');
+            return n;
+          })
+        }
+        onPrevPage={() =>
+          setSearchParams((p) => {
+            const n = new URLSearchParams(p);
+            n.delete('after');
+            return n;
+          })
+        }
       />
     </div>
   );

@@ -3,7 +3,7 @@ import express from 'express';
 import { ApolloServer } from 'apollo-server-express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { useServer } from 'graphql-ws';
+import { useServer } from 'graphql-ws/lib/use/ws';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -14,6 +14,7 @@ import { typeDefs } from './schema/typeDefs';
 import { resolvers } from './resolvers';
 import { db } from './database/connection';
 import * as loaders from './loaders';
+import { RealtimePublisher } from './services/realtime-publisher';
 
 // Load environment variables
 dotenv.config();
@@ -23,12 +24,14 @@ class ApiServer {
   private app: express.Application;
   private httpServer: any;
   private logger: winston.Logger;
+  private realtimePublisher: RealtimePublisher;
 
   constructor() {
     this.app = express();
     this.setupLogger();
     this.setupMiddleware();
     this.setupApolloServer();
+    this.realtimePublisher = new RealtimePublisher(3000);
   }
 
   private setupLogger(): void {
@@ -157,6 +160,9 @@ class ApiServer {
       // Setup WebSocket subscriptions
       this.setupWebSocketServer();
 
+      // Start real-time publisher (polls DB and fires PubSub events)
+      await this.realtimePublisher.start();
+
       // Start listening
       const port = process.env.PORT || 4000;
       this.httpServer.listen(port, () => {
@@ -176,21 +182,22 @@ class ApiServer {
       path: '/graphql',
     });
 
+    // Use the schema from the already-started Apollo server
+    const schema = this.apolloServer.schema;
+
     useServer(
       {
-        schema: { typeDefs, resolvers },
-        context: async (ctx, msg, args) => {
-          return {
-            db,
-            loaders,
-            logger: this.logger,
-          };
-        },
-        onConnect: (ctx) => {
+        schema,
+        context: async () => ({
+          db,
+          loaders,
+          logger: this.logger,
+        }),
+        onConnect: () => {
           this.logger.info('WebSocket client connected');
           return true;
         },
-        onDisconnect: (ctx, code, reason) => {
+        onDisconnect: (_ctx: any, code: number, reason: string) => {
           this.logger.info('WebSocket client disconnected', { code, reason });
         },
       },
@@ -215,6 +222,7 @@ class ApiServer {
     this.logger.info('🛑 Shutting down server...');
     
     try {
+      this.realtimePublisher.stop();
       await this.apolloServer.stop();
       await db.disconnect();
       
