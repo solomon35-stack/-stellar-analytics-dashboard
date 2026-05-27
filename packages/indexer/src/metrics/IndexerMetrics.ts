@@ -38,6 +38,7 @@ export class IndexerMetrics {
   readonly errorsTotal: Counter<string>;
   readonly validationFailures: Counter<string>;
   readonly idempotencySkips: Counter<string>;
+  readonly websocketReconnections: Counter<string>;
 
   // Histograms
   readonly cycleDuration: Histogram<string>;
@@ -93,6 +94,13 @@ export class IndexerMetrics {
     this.idempotencySkips = new Counter({
       name: 'indexer_idempotency_skips_total',
       help: 'Total number of ledgers skipped because they were already processed',
+      registers: [this.registry],
+    });
+
+    // Issue #34 – WebSocket reconnection counter
+    this.websocketReconnections = new Counter({
+      name: 'indexer_websocket_reconnections_total',
+      help: 'Total number of WebSocket reconnection attempts',
       registers: [this.registry],
     });
 
