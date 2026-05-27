@@ -1,5 +1,5 @@
 import { GraphQLResolveInfo } from 'graphql';
-import { db } from '../database/connection';
+import { db, CACHE_TTL } from '../database/connection';
 
 export const transactionResolvers = {
   Query: {
@@ -19,9 +19,28 @@ export const transactionResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+      if (args.filter) {
+        ValidationService.validateTransactionFilter(args.filter);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
       const { successful, minFee, maxFee, hasMemo, memoType } = args.filter || {};
+
+      const cacheKey = `transactions:${first}:${after || 'none'}:${before || 'none'}:${startTime || 'all'}:${endTime || 'all'}:${successful ?? 'all'}:${minFee ?? 'none'}:${maxFee ?? 'none'}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        await db.incrementCacheMetric('transactions');
+        return cached;
+      }
 
       let whereClause = 'WHERE 1=1';
       const params: any[] = [];
@@ -127,7 +146,7 @@ export const transactionResolvers = {
       const hasNextPage = edges.length === limit;
       const hasPreviousPage = after ? true : false;
 
-      return {
+      const result = {
         edges,
         pageInfo: {
           hasNextPage,
@@ -137,6 +156,11 @@ export const transactionResolvers = {
         },
         totalCount,
       };
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.LEDGER_DATA);
+      await db.incrementCacheMetric('transactions');
+      return result;
     },
 
     transaction: async (
@@ -145,6 +169,15 @@ export const transactionResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      const cacheKey = `transaction:${args.hash}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        await db.incrementCacheMetric('transaction');
+        return cached;
+      }
+
       const transaction = await db.queryOne(
         `SELECT 
           id, paging_token, successful, hash, ledger_sequence, created_at,
@@ -158,7 +191,7 @@ export const transactionResolvers = {
 
       if (!transaction) return null;
 
-      return {
+      const result = {
         ...transaction,
         createdAt: transaction.created_at,
         sourceAccount: transaction.source_account,
@@ -178,6 +211,11 @@ export const transactionResolvers = {
         innerTransactionHash: transaction.inner_transaction_hash,
         innerTransactionSignatures: transaction.inner_transaction_signatures,
       };
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.LEDGER_DATA);
+      await db.incrementCacheMetric('transaction');
+      return result;
     },
   },
 

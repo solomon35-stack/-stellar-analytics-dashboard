@@ -221,3 +221,20 @@ CREATE TRIGGER update_accounts_updated_at BEFORE UPDATE ON accounts
 
 CREATE TRIGGER update_trustlines_updated_at BEFORE UPDATE ON trustlines
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+-- Issue #44 – Idempotency tracking table
+-- Tracks every ledger sequence that has been fully processed so re-runs are
+-- safe no-ops.  Created by IdempotencyTracker.initialize() at startup, but
+-- also included here so it is present after a fresh schema migration.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS processed_ledgers (
+    sequence        BIGINT PRIMARY KEY,
+    processed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tx_count        INTEGER NOT NULL DEFAULT 0,
+    op_count        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_ledgers_processed_at
+    ON processed_ledgers (processed_at DESC);

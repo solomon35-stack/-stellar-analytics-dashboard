@@ -1,16 +1,53 @@
+/**
+ * IndexerService – orchestrates ledger polling, validation, circuit breaking,
+ * metrics collection, and idempotent writes.
+ *
+ * Issues addressed:
+ *   #39 – Data validation via Zod schemas before any DB write
+ *   #41 – Circuit breaker wrapping all Horizon API calls
+ *   #43 – Prometheus metrics for every significant operation
+ *   #44 – Idempotency: skip already-processed ledgers
+ */
+
+import { Horizon } from '@stellar/stellar-sdk';
 import { StellarService } from './stellar-service';
 import { db } from '../database/connection';
 import { INDEXER, PAYMENT_OPERATIONS, DEX_OPERATIONS } from '@stellar-analytics/shared';
-import { Horizon } from '@stellar/stellar-sdk';
+import { CircuitBreaker, CircuitOpenError } from '../circuit-breaker/CircuitBreaker';
+import { metrics } from '../metrics/IndexerMetrics';
+import { IdempotencyTracker } from '../idempotency/IdempotencyTracker';
+import {
+  HorizonLedgerSchema,
+  HorizonTransactionSchema,
+  HorizonOperationSchema,
+  validateRecord,
+  validateRecords,
+} from '../validation/schemas';
 
 export class IndexerService {
   private stellarService: StellarService;
   private isRunning: boolean = false;
   private lastProcessedLedger: number = 0;
 
+  private readonly circuitBreaker: CircuitBreaker;
+  private readonly idempotency: IdempotencyTracker;
+
   constructor(stellarService: StellarService) {
     this.stellarService = stellarService;
+
+    this.circuitBreaker = new CircuitBreaker({
+      name: 'HorizonAPI',
+      failureThreshold: 5,
+      cooldownMs: 5 * 60 * 1000, // 5 minutes
+      successThreshold: 2,
+    });
+
+    this.idempotency = new IdempotencyTracker(db.getPool());
   }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
 
   async start(): Promise<void> {
     if (this.isRunning) {
@@ -22,6 +59,9 @@ export class IndexerService {
     this.isRunning = true;
 
     try {
+      // Initialise idempotency table + warm cache
+      await this.idempotency.initialize();
+
       await this.initializeLastProcessedLedger();
       await this.startRealtimeStreaming();
       await this.startBackfill();
@@ -37,229 +77,419 @@ export class IndexerService {
     this.isRunning = false;
   }
 
+  // ---------------------------------------------------------------------------
+  // Initialisation helpers
+  // ---------------------------------------------------------------------------
+
   private async initializeLastProcessedLedger(): Promise<void> {
+    // Prefer the idempotency table as the source of truth
+    const lastIdempotent = await this.idempotency.getLastProcessedSequence();
+
+    if (lastIdempotent !== null) {
+      this.lastProcessedLedger = lastIdempotent;
+      console.log(`[indexer] resuming from idempotency table at ledger ${this.lastProcessedLedger}`);
+      metrics.lastProcessedLedger.set(this.lastProcessedLedger);
+      return;
+    }
+
+    // Fall back to the ledgers table
     const latestLedger = await db.queryOne<{ sequence: number }>(
-      'SELECT sequence FROM ledgers ORDER BY sequence DESC LIMIT 1'
+      'SELECT sequence FROM ledgers ORDER BY sequence DESC LIMIT 1',
     );
 
     if (latestLedger) {
       this.lastProcessedLedger = latestLedger.sequence;
-      console.log(`Resuming from ledger ${this.lastProcessedLedger}`);
+      console.log(`[indexer] resuming from ledgers table at ledger ${this.lastProcessedLedger}`);
     } else {
-      const horizonLatest = await this.stellarService.getLatestLedger();
-      this.lastProcessedLedger = horizonLatest.sequence - 1; // Start from previous ledger
-      console.log(`Starting from ledger ${this.lastProcessedLedger}`);
+      const horizonLatest = await this.circuitBreaker.execute(() =>
+        this.stellarService.getLatestLedger(),
+      );
+      this.lastProcessedLedger = horizonLatest.sequence - 1;
+      console.log(`[indexer] starting fresh from ledger ${this.lastProcessedLedger}`);
     }
+
+    metrics.lastProcessedLedger.set(this.lastProcessedLedger);
   }
 
+  // ---------------------------------------------------------------------------
+  // Streaming
+  // ---------------------------------------------------------------------------
+
   private async startRealtimeStreaming(): Promise<void> {
-    console.log('Starting real-time ledger streaming...');
-    
+    console.log('[indexer] starting real-time ledger streaming...');
+
     this.stellarService.streamLedgers(
       async (ledger) => {
         if (ledger.sequence > this.lastProcessedLedger) {
           await this.processLedger(ledger);
           this.lastProcessedLedger = ledger.sequence;
+          metrics.lastProcessedLedger.set(this.lastProcessedLedger);
         }
       },
       (error) => {
-        console.error('Ledger stream error:', error);
+        console.error('[indexer] ledger stream error:', error);
+        metrics.errorsTotal.inc({ type: 'stream' });
         setTimeout(() => {
-          if (this.isRunning) {
-            this.startRealtimeStreaming();
-          }
+          if (this.isRunning) this.startRealtimeStreaming();
         }, INDEXER.WEBSOCKET_RECONNECT_DELAY);
-      }
+      },
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Backfill
+  // ---------------------------------------------------------------------------
+
   private async startBackfill(): Promise<void> {
-    console.log('Starting historical data backfill...');
-    
-    const horizonLatest = await this.stellarService.getLatestLedger();
-    
+    console.log('[indexer] starting historical data backfill...');
+
+    let horizonLatest: Horizon.ServerApi.LedgerRecord;
+    try {
+      horizonLatest = await this.circuitBreaker.execute(() =>
+        this.stellarService.getLatestLedger(),
+      );
+    } catch (err) {
+      if (err instanceof CircuitOpenError) {
+        console.warn('[indexer] circuit open – skipping backfill');
+        return;
+      }
+      throw err;
+    }
+
     if (this.lastProcessedLedger < horizonLatest.sequence - 10) {
-      // Only backfill if we're more than 10 ledgers behind
       await this.backfillLedgers(this.lastProcessedLedger + 1, horizonLatest.sequence - 10);
     }
   }
 
   private async backfillLedgers(startSequence: number, endSequence: number): Promise<void> {
-    console.log(`Backfilling ledgers ${startSequence} to ${endSequence}`);
-    
-    for (let sequence = startSequence; sequence <= endSequence; sequence += INDEXER.BACKFILL_BATCH_SIZE) {
+    console.log(`[indexer] backfilling ledgers ${startSequence} → ${endSequence}`);
+
+    for (
+      let sequence = startSequence;
+      sequence <= endSequence;
+      sequence += INDEXER.BACKFILL_BATCH_SIZE
+    ) {
       if (!this.isRunning) break;
 
       const batchEnd = Math.min(sequence + INDEXER.BACKFILL_BATCH_SIZE - 1, endSequence);
-      
+
       try {
         await this.processLedgerBatch(sequence, batchEnd);
-        console.log(`Backfilled ledgers ${sequence} to ${batchEnd}`);
+        console.log(`[indexer] backfilled ledgers ${sequence} → ${batchEnd}`);
       } catch (error) {
-        console.error(`Error backfilling ledgers ${sequence} to ${batchEnd}:`, error);
+        console.error(`[indexer] error backfilling ledgers ${sequence} → ${batchEnd}:`, error);
+        metrics.errorsTotal.inc({ type: 'backfill' });
       }
     }
   }
 
   private async processLedgerBatch(startSequence: number, endSequence: number): Promise<void> {
     const ledgers: Horizon.ServerApi.LedgerRecord[] = [];
-    
+
     for (let sequence = startSequence; sequence <= endSequence; sequence++) {
       try {
-        const ledger = await this.stellarService.getLedger(sequence);
+        const ledger = await this.circuitBreaker.execute(() =>
+          this.stellarService.getLedger(sequence),
+        );
         ledgers.push(ledger);
       } catch (error) {
-        console.error(`Error fetching ledger ${sequence}:`, error);
+        if (error instanceof CircuitOpenError) {
+          console.warn(`[indexer] circuit open – aborting batch at sequence ${sequence}`);
+          return;
+        }
+        console.error(`[indexer] error fetching ledger ${sequence}:`, error);
+        metrics.errorsTotal.inc({ type: 'fetch_ledger' });
       }
     }
 
-    // Process ledgers in parallel
-    await Promise.all(ledgers.map(ledger => this.processLedger(ledger)));
+    await Promise.all(ledgers.map((ledger) => this.processLedger(ledger)));
   }
 
-  private async processLedger(ledger: Horizon.ServerApi.LedgerRecord): Promise<void> {
+  // ---------------------------------------------------------------------------
+  // Core processing
+  // ---------------------------------------------------------------------------
+
+  private async processLedger(rawLedger: unknown): Promise<void> {
+    // ── #39 Validate ──────────────────────────────────────────────────────────
+    let ledger: Horizon.ServerApi.LedgerRecord;
+    try {
+      ledger = validateRecord(
+        HorizonLedgerSchema,
+        rawLedger,
+        'ledger',
+      ) as unknown as Horizon.ServerApi.LedgerRecord;
+    } catch (err) {
+      console.error('[indexer] ledger validation failed – skipping:', err);
+      metrics.validationFailures.inc({ entity: 'ledger' });
+      metrics.errorsTotal.inc({ type: 'validation' });
+      return;
+    }
+
+    // ── #44 Idempotency ───────────────────────────────────────────────────────
+    if (await this.idempotency.shouldSkip(ledger.sequence)) return;
+
+    // ── #43 Metrics – cycle timer ─────────────────────────────────────────────
+    const cycleEnd = metrics.cycleDuration.startTimer();
+
     try {
       await db.transaction(async (client) => {
-        // Insert ledger
-        await client.query(`
-          INSERT INTO ledgers (
+        // ── DB write: ledger ──────────────────────────────────────────────────
+        const dbWriteEnd = metrics.dbWriteDuration.startTimer({ table: 'ledgers' });
+        await client.query(
+          `INSERT INTO ledgers (
             id, sequence, successful_transaction_count, failed_transaction_count,
             operation_count, tx_set_operation_count, closed_at, total_coins,
             fee_pool, base_fee_in_stroops, base_reserve_in_stroops,
             max_tx_set_size, protocol_version, header_xdr
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
           ON CONFLICT (sequence) DO UPDATE SET
             successful_transaction_count = EXCLUDED.successful_transaction_count,
-            failed_transaction_count = EXCLUDED.failed_transaction_count,
-            operation_count = EXCLUDED.operation_count,
-            tx_set_operation_count = EXCLUDED.tx_set_operation_count,
-            updated_at = NOW()
-        `, [
-          ledger.id,
-          ledger.sequence,
-          ledger.successful_transaction_count,
-          ledger.failed_transaction_count,
-          ledger.operation_count,
-          ledger.tx_set_operation_count,
-          ledger.closed_at,
-          ledger.total_coins,
-          ledger.fee_pool,
-          ledger.base_fee_in_stroops,
-          ledger.base_reserve_in_stroops,
-          ledger.max_tx_set_size,
-          ledger.protocol_version,
-          ledger.header_xdr
-        ]);
+            failed_transaction_count     = EXCLUDED.failed_transaction_count,
+            operation_count              = EXCLUDED.operation_count,
+            tx_set_operation_count       = EXCLUDED.tx_set_operation_count,
+            updated_at                   = NOW()`,
+          [
+            ledger.id,
+            ledger.sequence,
+            ledger.successful_transaction_count,
+            ledger.failed_transaction_count,
+            ledger.operation_count,
+            ledger.tx_set_operation_count,
+            ledger.closed_at,
+            ledger.total_coins,
+            ledger.fee_pool,
+            ledger.base_fee_in_stroops,
+            ledger.base_reserve_in_stroops,
+            ledger.max_tx_set_size,
+            ledger.protocol_version,
+            ledger.header_xdr,
+          ],
+        );
+        dbWriteEnd();
 
-        // Process transactions
+        // ── Transactions ──────────────────────────────────────────────────────
         await this.processTransactionsForLedger(ledger.sequence, client);
       });
 
-      // Update metrics after successful processing
+      // ── Network metrics ───────────────────────────────────────────────────
       await this.updateNetworkMetrics(ledger);
-      
+
+      // ── #44 Mark processed ────────────────────────────────────────────────
+      await this.idempotency.markProcessed(
+        ledger.sequence,
+        ledger.successful_transaction_count + ledger.failed_transaction_count,
+        ledger.operation_count,
+      );
+
+      // ── #43 Counters ──────────────────────────────────────────────────────
+      metrics.ledgersProcessed.inc();
+      metrics.lastProcessedLedger.set(ledger.sequence);
+
+      // Update circuit breaker state gauge
+      metrics.setCircuitBreakerState(this.circuitBreaker.getState());
     } catch (error) {
-      console.error(`Error processing ledger ${ledger.sequence}:`, error);
+      console.error(`[indexer] error processing ledger ${(rawLedger as any)?.sequence}:`, error);
+      metrics.errorsTotal.inc({ type: 'process_ledger' });
       throw error;
+    } finally {
+      cycleEnd();
     }
   }
 
-  private async processTransactionsForLedger(ledgerSequence: number, client: any): Promise<void> {
-    const transactions = await this.stellarService.getTransactionsForLedger(ledgerSequence);
-    
-    for (const txRecord of transactions.records) {
-      await this.processTransaction(txRecord, client);
+  // ---------------------------------------------------------------------------
+  // Transactions
+  // ---------------------------------------------------------------------------
+
+  private async processTransactionsForLedger(
+    ledgerSequence: number,
+    client: any,
+  ): Promise<void> {
+    // ── #41 Circuit breaker ───────────────────────────────────────────────────
+    const horizonEnd = metrics.horizonRequestDuration.startTimer({ endpoint: 'transactions' });
+    let rawTransactions: Horizon.ServerApi.CollectionPage<Horizon.ServerApi.TransactionRecord>;
+    try {
+      rawTransactions = await this.circuitBreaker.execute(() =>
+        this.stellarService.getTransactionsForLedger(ledgerSequence),
+      );
+    } catch (err) {
+      if (err instanceof CircuitOpenError) {
+        console.warn(`[indexer] circuit open – skipping transactions for ledger ${ledgerSequence}`);
+        return;
+      }
+      throw err;
+    } finally {
+      horizonEnd();
+    }
+
+    // ── #39 Validate ──────────────────────────────────────────────────────────
+    const { valid: transactions, invalid } = validateRecords(
+      HorizonTransactionSchema,
+      rawTransactions.records,
+      'transaction',
+    );
+
+    if (invalid.length > 0) {
+      metrics.validationFailures.inc({ entity: 'transaction' });
+      console.warn(
+        `[indexer] ${invalid.length} invalid transaction(s) in ledger ${ledgerSequence} – skipped`,
+      );
+    }
+
+    for (const tx of transactions) {
+      await this.processTransaction(
+        tx as unknown as Horizon.ServerApi.TransactionRecord,
+        client,
+      );
     }
   }
 
-  private async processTransaction(txRecord: Horizon.ServerApi.TransactionRecord, client: any): Promise<void> {
-    // Insert transaction
-    await client.query(`
-      INSERT INTO transactions (
-        id, paging_token, successful, hash, ledger_sequence, created_at,
-        source_account, source_account_sequence, fee_account, fee_charged,
-        max_fee, operation_count, envelope_xdr, result_xdr, result_meta_xdr,
-        fee_meta_xdr, memo_type, memo, signatures, valid_after, valid_before,
-        fee_bump_transaction, inner_transaction_hash, inner_transaction_signatures
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-      ON CONFLICT (hash) DO UPDATE SET
-        successful = EXCLUDED.successful,
-        updated_at = NOW()
-    `, [
-      txRecord.id,
-      txRecord.paging_token,
-      txRecord.successful,
-      txRecord.hash,
-      txRecord.ledger,
-      txRecord.created_at,
-      txRecord.source_account,
-      txRecord.source_account_sequence,
-      txRecord.fee_account,
-      txRecord.fee_charged,
-      txRecord.max_fee,
-      txRecord.operation_count,
-      txRecord.envelope_xdr,
-      txRecord.result_xdr,
-      txRecord.result_meta_xdr,
-      txRecord.fee_meta_xdr,
-      txRecord.memo_type || 'none',
-      txRecord.memo,
-      JSON.stringify(txRecord.signatures),
-      txRecord.valid_after,
-      txRecord.valid_before,
-      txRecord.fee_bump_transaction,
-      txRecord.inner_transaction?.hash,
-      txRecord.inner_transaction ? JSON.stringify(txRecord.inner_transaction.signatures) : null
-    ]);
+  private async processTransaction(
+    txRecord: Horizon.ServerApi.TransactionRecord,
+    client: any,
+  ): Promise<void> {
+    const dbWriteEnd = metrics.dbWriteDuration.startTimer({ table: 'transactions' });
+    try {
+      await client.query(
+        `INSERT INTO transactions (
+          id, paging_token, successful, hash, ledger_sequence, created_at,
+          source_account, source_account_sequence, fee_account, fee_charged,
+          max_fee, operation_count, envelope_xdr, result_xdr, result_meta_xdr,
+          fee_meta_xdr, memo_type, memo, signatures, valid_after, valid_before,
+          fee_bump_transaction, inner_transaction_hash, inner_transaction_signatures
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+        ON CONFLICT (hash) DO UPDATE SET
+          successful = EXCLUDED.successful,
+          updated_at = NOW()`,
+        [
+          txRecord.id,
+          txRecord.paging_token,
+          txRecord.successful,
+          txRecord.hash,
+          txRecord.ledger,
+          txRecord.created_at,
+          txRecord.source_account,
+          txRecord.source_account_sequence,
+          txRecord.fee_account,
+          txRecord.fee_charged,
+          txRecord.max_fee,
+          txRecord.operation_count,
+          txRecord.envelope_xdr,
+          txRecord.result_xdr,
+          txRecord.result_meta_xdr,
+          txRecord.fee_meta_xdr,
+          txRecord.memo_type || 'none',
+          txRecord.memo,
+          JSON.stringify(txRecord.signatures),
+          txRecord.valid_after,
+          txRecord.valid_before,
+          txRecord.fee_bump_transaction,
+          txRecord.inner_transaction?.hash,
+          txRecord.inner_transaction
+            ? JSON.stringify(txRecord.inner_transaction.signatures)
+            : null,
+        ],
+      );
+    } finally {
+      dbWriteEnd();
+    }
 
-    // Process operations
+    metrics.transactionsProcessed.inc();
+
     await this.processOperationsForTransaction(txRecord.hash, client);
   }
 
-  private async processOperationsForTransaction(transactionHash: string, client: any): Promise<void> {
-    const operations = await this.stellarService.getOperationsForTransaction(transactionHash);
-    
-    for (const opRecord of operations.records) {
-      await this.processOperation(opRecord, client);
+  // ---------------------------------------------------------------------------
+  // Operations
+  // ---------------------------------------------------------------------------
+
+  private async processOperationsForTransaction(
+    transactionHash: string,
+    client: any,
+  ): Promise<void> {
+    const horizonEnd = metrics.horizonRequestDuration.startTimer({ endpoint: 'operations' });
+    let rawOperations: Horizon.ServerApi.CollectionPage<Horizon.ServerApi.OperationRecord>;
+    try {
+      rawOperations = await this.circuitBreaker.execute(() =>
+        this.stellarService.getOperationsForTransaction(transactionHash),
+      );
+    } catch (err) {
+      if (err instanceof CircuitOpenError) {
+        console.warn(
+          `[indexer] circuit open – skipping operations for tx ${transactionHash}`,
+        );
+        return;
+      }
+      throw err;
+    } finally {
+      horizonEnd();
+    }
+
+    // ── #39 Validate ──────────────────────────────────────────────────────────
+    const { valid: operations, invalid } = validateRecords(
+      HorizonOperationSchema,
+      rawOperations.records,
+      'operation',
+    );
+
+    if (invalid.length > 0) {
+      metrics.validationFailures.inc({ entity: 'operation' });
+      console.warn(
+        `[indexer] ${invalid.length} invalid operation(s) for tx ${transactionHash} – skipped`,
+      );
+    }
+
+    for (const op of operations) {
+      await this.processOperation(
+        op as unknown as Horizon.ServerApi.OperationRecord,
+        client,
+      );
     }
   }
 
-  private async processOperation(opRecord: Horizon.ServerApi.OperationRecord, client: any): Promise<void> {
+  private async processOperation(
+    opRecord: Horizon.ServerApi.OperationRecord,
+    client: any,
+  ): Promise<void> {
     const details = this.extractOperationDetails(opRecord);
-    
-    await client.query(`
-      INSERT INTO operations (
-        id, paging_token, transaction_hash, transaction_successful,
-        type, created_at, source_account, ledger_sequence, operation_index, details
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      ON CONFLICT (id) DO UPDATE SET
-        transaction_successful = EXCLUDED.transaction_successful,
-        details = EXCLUDED.details,
-        updated_at = NOW()
-    `, [
-      opRecord.id,
-      opRecord.paging_token,
-      opRecord.transaction_hash,
-      opRecord.transaction_successful,
-      opRecord.type,
-      opRecord.created_at,
-      opRecord.source_account,
-      opRecord.id.split('-')[0], // Extract ledger sequence from operation ID
-      parseInt(opRecord.id.split('-')[1]), // Extract operation index
-      JSON.stringify(details)
-    ]);
+
+    const dbWriteEnd = metrics.dbWriteDuration.startTimer({ table: 'operations' });
+    try {
+      await client.query(
+        `INSERT INTO operations (
+          id, paging_token, transaction_hash, transaction_successful,
+          type, created_at, source_account, ledger_sequence, operation_index, details
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (id) DO UPDATE SET
+          transaction_successful = EXCLUDED.transaction_successful,
+          details                = EXCLUDED.details,
+          updated_at             = NOW()`,
+        [
+          opRecord.id,
+          opRecord.paging_token,
+          opRecord.transaction_hash,
+          opRecord.transaction_successful,
+          opRecord.type,
+          opRecord.created_at,
+          opRecord.source_account,
+          opRecord.id.split('-')[0],
+          parseInt(opRecord.id.split('-')[1]),
+          JSON.stringify(details),
+        ],
+      );
+    } finally {
+      dbWriteEnd();
+    }
+
+    metrics.operationsProcessed.inc();
   }
 
-  private extractOperationDetails(operation: Horizon.ServerApi.OperationRecord): any {
-    const baseDetails = {
-      type: operation.type,
-      source_account: operation.source_account,
-    };
+  private extractOperationDetails(operation: Horizon.ServerApi.OperationRecord): unknown {
+    const base = { type: operation.type, source_account: operation.source_account };
 
     switch (operation.type) {
       case 'payment':
         return {
-          ...baseDetails,
+          ...base,
           asset_type: operation.asset_type,
           asset_code: operation.asset_code,
           asset_issuer: operation.asset_issuer,
@@ -267,28 +497,25 @@ export class IndexerService {
           to: operation.to,
           amount: operation.amount,
         };
-
       case 'create_account':
         return {
-          ...baseDetails,
+          ...base,
           account: operation.account,
           starting_balance: operation.starting_balance,
           funder: operation.funder,
         };
-
       case 'manage_sell_offer':
         return {
-          ...baseDetails,
+          ...base,
           selling_asset: operation.selling_asset,
           buying_asset: operation.buying_asset,
           amount: operation.amount,
           price: operation.price,
           offer_id: operation.offer_id,
         };
-
       case 'path_payment_strict_receive':
         return {
-          ...baseDetails,
+          ...base,
           from: operation.from,
           to: operation.to,
           amount: operation.amount,
@@ -298,10 +525,9 @@ export class IndexerService {
           destination_min: operation.destination_min,
           path: operation.path,
         };
-
       case 'change_trust':
         return {
-          ...baseDetails,
+          ...base,
           asset_type: operation.asset_type,
           asset_code: operation.asset_code,
           asset_issuer: operation.asset_issuer,
@@ -309,89 +535,121 @@ export class IndexerService {
           trustee: operation.trustee,
           limit: operation.limit,
         };
-
       default:
-        return baseDetails;
+        return base;
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Network metrics
+  // ---------------------------------------------------------------------------
+
   private async updateNetworkMetrics(ledger: Horizon.ServerApi.LedgerRecord): Promise<void> {
     const timestamp = new Date(ledger.closed_at);
-    
-    // Calculate metrics for the time window
-    const metrics = await this.calculateNetworkMetrics(timestamp);
-    
-    await db.query(`
-      INSERT INTO network_metrics (
+    const metrics_ = await this.calculateNetworkMetrics(timestamp);
+
+    await db.query(
+      `INSERT INTO network_metrics (
         timestamp, ledger_count, transaction_count, operation_count,
         active_accounts, total_volume, average_fee, success_rate
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [
-      timestamp,
-      metrics.ledgerCount,
-      metrics.transactionCount,
-      metrics.operationCount,
-      metrics.activeAccounts,
-      metrics.totalVolume,
-      metrics.averageFee,
-      metrics.successRate
-    ]);
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        timestamp,
+        metrics_.ledgerCount,
+        metrics_.transactionCount,
+        metrics_.operationCount,
+        metrics_.activeAccounts,
+        metrics_.totalVolume,
+        metrics_.averageFee,
+        metrics_.successRate,
+      ],
+    );
   }
 
-  private async calculateNetworkMetrics(timestamp: Date): Promise<any> {
+  private async calculateNetworkMetrics(timestamp: Date): Promise<{
+    ledgerCount: number;
+    transactionCount: number;
+    operationCount: number;
+    activeAccounts: number;
+    totalVolume: string;
+    averageFee: number;
+    successRate: number;
+  }> {
     const oneHourAgo = new Date(timestamp.getTime() - 60 * 60 * 1000);
-    
-    const [txMetrics, opMetrics, accountMetrics] = await Promise.all([
-      db.queryOne(`
-        SELECT 
-          COUNT(*) as transaction_count,
-          COUNT(CASE WHEN successful THEN 1 END) as successful_count,
-          AVG(fee_charged) as average_fee
-        FROM transactions 
-        WHERE created_at >= $1 AND created_at <= $2
-      `, [oneHourAgo, timestamp]),
-      
-      db.queryOne(`
-        SELECT COUNT(*) as operation_count
-        FROM operations 
-        WHERE created_at >= $1 AND created_at <= $2
-      `, [oneHourAgo, timestamp]),
-      
-      db.queryOne(`
-        SELECT COUNT(DISTINCT source_account) as active_accounts
-        FROM transactions 
-        WHERE created_at >= $1 AND created_at <= $2
-      `, [oneHourAgo, timestamp])
+
+    const [txMetrics, opMetrics, accountMetrics, volumeResult] = await Promise.all([
+      db.queryOne<{
+        transaction_count: string;
+        successful_count: string;
+        average_fee: string;
+      }>(
+        `SELECT
+           COUNT(*)                                  AS transaction_count,
+           COUNT(CASE WHEN successful THEN 1 END)    AS successful_count,
+           AVG(fee_charged)                          AS average_fee
+         FROM transactions
+         WHERE created_at >= $1 AND created_at <= $2`,
+        [oneHourAgo, timestamp],
+      ),
+      db.queryOne<{ operation_count: string }>(
+        `SELECT COUNT(*) AS operation_count
+         FROM operations
+         WHERE created_at >= $1 AND created_at <= $2`,
+        [oneHourAgo, timestamp],
+      ),
+      db.queryOne<{ active_accounts: string }>(
+        `SELECT COUNT(DISTINCT source_account) AS active_accounts
+         FROM transactions
+         WHERE created_at >= $1 AND created_at <= $2`,
+        [oneHourAgo, timestamp],
+      ),
+      db.queryOne<{ total_volume: string }>(
+        `SELECT SUM(CAST(details->>'amount' AS NUMERIC)) AS total_volume
+         FROM operations
+         WHERE type = 'payment'
+           AND created_at >= $1 AND created_at <= $2`,
+        [oneHourAgo, timestamp],
+      ),
     ]);
 
-    const successRate = txMetrics.transaction_count > 0 
-      ? (txMetrics.successful_count / txMetrics.transaction_count) * 100 
-      : 0;
-
-    // Calculate total volume from payment operations
-    const volumeResult = await db.queryOne(`
-      SELECT SUM(CAST(details->>'amount' AS NUMERIC)) as total_volume
-      FROM operations 
-      WHERE type = 'payment' 
-      AND created_at >= $1 AND created_at <= $2
-    `, [oneHourAgo, timestamp]);
+    const txCount = parseInt(txMetrics?.transaction_count ?? '0');
+    const successCount = parseInt(txMetrics?.successful_count ?? '0');
+    const successRate = txCount > 0 ? parseFloat(((successCount / txCount) * 100).toFixed(2)) : 0;
 
     return {
       ledgerCount: 1,
-      transactionCount: parseInt(txMetrics.transaction_count),
-      operationCount: parseInt(opMetrics.operation_count),
-      activeAccounts: parseInt(accountMetrics.active_accounts),
-      totalVolume: volumeResult.total_volume || '0',
-      averageFee: parseFloat(txMetrics.average_fee) || 0,
-      successRate: parseFloat(successRate.toFixed(2))
+      transactionCount: txCount,
+      operationCount: parseInt(opMetrics?.operation_count ?? '0'),
+      activeAccounts: parseInt(accountMetrics?.active_accounts ?? '0'),
+      totalVolume: volumeResult?.total_volume ?? '0',
+      averageFee: parseFloat(txMetrics?.average_fee ?? '0') || 0,
+      successRate,
     };
   }
 
-  async getStatus(): Promise<any> {
+  // ---------------------------------------------------------------------------
+  // Status / health
+  // ---------------------------------------------------------------------------
+
+  async getStatus(): Promise<{
+    isRunning: boolean;
+    lastProcessedLedger: number;
+    horizonUrl: string;
+    circuitBreaker: ReturnType<CircuitBreaker['getStats']>;
+    idempotencyCacheSize: number;
+  }> {
     return {
       isRunning: this.isRunning,
       lastProcessedLedger: this.lastProcessedLedger,
       horizonUrl: this.stellarService.getHorizonUrl(),
+      circuitBreaker: this.circuitBreaker.getStats(),
+      idempotencyCacheSize: this.idempotency.cacheSize(),
     };
+  }
+
+  /** Manually reset the circuit breaker (e.g. from an admin endpoint). */
+  resetCircuitBreaker(): void {
+    this.circuitBreaker.reset();
+    metrics.setCircuitBreakerState('CLOSED');
   }
 }

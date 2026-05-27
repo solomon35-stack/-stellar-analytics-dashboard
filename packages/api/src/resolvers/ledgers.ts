@@ -1,5 +1,5 @@
 import { GraphQLResolveInfo } from 'graphql';
-import { db } from '../database/connection';
+import { db, CACHE_TTL } from '../database/connection';
 import { Connection, Edge, PageInfo } from '@stellar-analytics/shared';
 
 export const ledgerResolvers = {
@@ -13,8 +13,23 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ): Promise<Connection<any>> => {
+      if (args.pagination) {
+        ValidationService.validatePagination(args.pagination);
+      }
+      if (args.timeRange) {
+        ValidationService.validateTimeRange(args.timeRange);
+      }
+
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
+
+      const cacheKey = `ledgers:${first}:${after || 'none'}:${before || 'none'}:${startTime || 'all'}:${endTime || 'all'}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
 
       let whereClause = 'WHERE 1=1';
       const params: any[] = [];
@@ -89,23 +104,27 @@ export const ledgerResolvers = {
         },
       }));
 
-      // Create page info
-      const startCursor = edges.length > 0 ? edges[0].cursor : null;
-      const endCursor = edges.length > 0 ? edges[edges.length - 1].cursor : null;
-      
-      const hasNextPage = edges.length === limit;
-      const hasPreviousPage = after ? true : false;
+// Create page info
+       const startCursor = edges.length > 0 ? edges[0].cursor : null;
+       const endCursor = edges.length > 0 ? edges[edges.length - 1].cursor : null;
+       
+       const hasNextPage = edges.length === limit;
+       const hasPreviousPage = after ? true : false;
 
-      return {
-        edges,
-        pageInfo: {
-          hasNextPage,
-          hasPreviousPage,
-          startCursor,
-          endCursor,
-        },
-        totalCount,
-      };
+       const result = {
+         edges,
+         pageInfo: {
+           hasNextPage,
+           hasPreviousPage,
+           startCursor,
+           endCursor,
+         },
+         totalCount,
+       };
+
+       // Cache the result
+       await db.cacheSet(cacheKey, result, CACHE_TTL.LEDGER_DATA);
+       return result;
     },
 
     ledger: async (
@@ -114,6 +133,14 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ) => {
+      const cacheKey = `ledger:${args.sequence}`;
+
+      // Try cache first
+      const cached = await db.cacheGet(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       const ledger = await db.queryOne(
         `SELECT 
           id, sequence, successful_transaction_count, failed_transaction_count,
@@ -126,7 +153,7 @@ export const ledgerResolvers = {
 
       if (!ledger) return null;
 
-      return {
+      const result = {
         ...ledger,
         closedAt: ledger.closed_at,
         successfulTransactionCount: ledger.successful_transaction_count,
@@ -143,6 +170,10 @@ export const ledgerResolvers = {
         createdAt: ledger.created_at,
         updatedAt: ledger.updated_at,
       };
+
+      // Cache the result
+      await db.cacheSet(cacheKey, result, CACHE_TTL.LEDGER_DATA);
+      return result;
     },
   },
 };
