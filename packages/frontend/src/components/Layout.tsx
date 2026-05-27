@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useRef, useEffect } from 'react';
+import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
   Network,
@@ -15,16 +15,15 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { GlobalSearch } from '@/components/GlobalSearch';
+import { ConnectionStatus } from '@/components/ConnectionStatus';
+import { useAppStore } from '@/store';
+import { usePreferencesStore } from '@/store';
+import { useNotifications } from '@/hooks/useNotifications';
 
-interface LayoutProps {
-  children: React.ReactNode;
-}
-
-export function Layout({ children }: LayoutProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => {
-    return localStorage.getItem('darkMode') === 'true';
-  });
+export function Layout() {
+  const { sidebarOpen, setSidebarOpen } = useAppStore();
+  const { theme, setTheme } = usePreferencesStore();
+  const { unreadCount } = useNotifications();
   const location = useLocation();
 
   // Ref to restore focus to the menu button when sidebar closes
@@ -41,14 +40,38 @@ export function Layout({ children }: LayoutProps) {
     { name: 'Ledgers', href: '/ledgers', icon: Database },
   ];
 
+  // Determine if dark mode should be active based on theme preference
+  const isDarkMode = React.useMemo(() => {
+    if (theme === 'dark') return true;
+    if (theme === 'light') return false;
+    // theme === 'system' - use system preference
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }, [theme]);
+
   React.useEffect(() => {
-    if (darkMode) {
+    if (isDarkMode) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
-    localStorage.setItem('darkMode', darkMode.toString());
-  }, [darkMode]);
+  }, [isDarkMode]);
+
+  // Listen for system theme changes when theme is set to 'system'
+  React.useEffect(() => {
+    if (theme !== 'system') return;
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      if (mediaQuery.matches) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [theme]);
 
   // Move focus into sidebar when it opens; restore when it closes
   useEffect(() => {
@@ -68,7 +91,7 @@ export function Layout({ children }: LayoutProps) {
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [sidebarOpen]);
+  }, [sidebarOpen, setSidebarOpen]);
 
   // Trap focus inside the mobile sidebar while it is open
   useEffect(() => {
@@ -263,29 +286,19 @@ export function Layout({ children }: LayoutProps) {
             </div>
 
             <div className="flex items-center gap-x-2 sm:gap-x-4 lg:gap-x-5">
-              {/* Network Status Badge */}
-              <div
-                role="status"
-                aria-live="polite"
-                aria-label="Network connection status: Mainnet live"
-                className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20"
-              >
-                <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" aria-hidden="true" />
-                <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest">
-                  Mainnet
-                </span>
-              </div>
+              {/* Connection Status Badge */}
+              <ConnectionStatus />
 
               <div className="h-6 w-[1px] bg-border hidden sm:block" aria-hidden="true" />
 
               {/* Dark mode toggle — 44px touch target */}
               <button
-                onClick={() => setDarkMode(!darkMode)}
+                onClick={() => setTheme(isDarkMode ? 'light' : 'dark')}
                 className="p-2.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-all min-w-[44px] min-h-[44px] flex items-center justify-center"
-                aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                aria-pressed={darkMode}
+                aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                aria-pressed={isDarkMode}
               >
-                {darkMode ? (
+                {isDarkMode ? (
                   <Sun className="h-5 w-5" aria-hidden="true" />
                 ) : (
                   <Moon className="h-5 w-5" aria-hidden="true" />
@@ -295,13 +308,19 @@ export function Layout({ children }: LayoutProps) {
               {/* Notifications — 44px touch target */}
               <button
                 className="p-2.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-all relative min-w-[44px] min-h-[44px] flex items-center justify-center"
-                aria-label="Notifications"
+                aria-label={unreadCount > 0 ? `Notifications — ${unreadCount} unread` : 'Notifications'}
               >
                 <Bell className="h-5 w-5" aria-hidden="true" />
-                <span
-                  className="absolute top-2 right-2 h-2 w-2 bg-primary rounded-full border-2 border-card"
-                  aria-label="Unread notifications"
-                />
+                {unreadCount > 0 && (
+                  <span
+                    className="absolute top-2 right-2 h-4 w-4 bg-primary rounded-full border-2 border-card flex items-center justify-center"
+                    aria-hidden="true"
+                  >
+                    <span className="text-[9px] font-bold text-primary-foreground leading-none">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  </span>
+                )}
               </button>
             </div>
           </div>
@@ -310,10 +329,11 @@ export function Layout({ children }: LayoutProps) {
         {/* Mobile search bar — shown only on small screens below the header */}
         <div className="sm:hidden px-4 py-2 border-b border-border bg-card/80 backdrop-blur-md">
           <GlobalSearch />
+        </div>
 
         {/* Page content */}
         <main id="main-content" tabIndex={-1} className="py-8 outline-none">
-          <div className="px-4 sm:px-6 lg:px-8 max-w-[1600px] mx-auto">{children}</div>
+          <div className="px-4 sm:px-6 lg:px-8 max-w-[1600px] mx-auto"><Outlet /></div>
         </main>
       </div>
     </div>
