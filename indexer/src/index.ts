@@ -1,25 +1,42 @@
 import "dotenv/config";
 import { Pool } from "pg";
 import { pollLatestLedger } from "./ingester.js";
-import { 
-  normalizeLedger, 
-  normalizeTransactions, 
-  normalizeOperations, 
-  normalizePayments 
+import {
+  normalizeLedger,
+  normalizeTransactions,
+  normalizeOperations,
+  normalizePayments,
 } from "./transformer.js";
 import { writeIngestedData } from "./loader.js";
 import { broadcastRealtimeUpdate } from "./websocket.js";
-import { STELLAR_NETWORKS, type StellarNetwork } from "@stellar-analytics/shared";
+import { validateConfig } from "./config.js";
+import { indexerLogger } from "./logger.js";
+import http from "http";
 
-const network = (process.env.STELLAR_NETWORK ?? "testnet") as StellarNetwork;
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
+// ---------------------------------------------------------------------------
+// Validate configuration on startup – fails fast with clear error messages
+// ---------------------------------------------------------------------------
+const config = validateConfig();
+
+const pool = config.databaseUrl
+  ? new Pool({ connectionString: config.databaseUrl })
+  : null;
+
+if (!pool) {
+  indexerLogger.warn(
+    "DATABASE_URL not set – running without database persistence"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main polling cycle
+// ---------------------------------------------------------------------------
 
 async function runCycle(): Promise<void> {
   try {
-    console.log(`[indexer] polling Horizon for ${String(network)}...`);
-    const ingested = await pollLatestLedger(network);
-    
-    // Normalize data
+    indexerLogger.debug({ network: config.network }, "Polling Horizon");
+    const ingested = await pollLatestLedger(config.network);
+
     const normalizedData = {
       ledger: normalizeLedger(ingested),
       transactions: normalizeTransactions(ingested),
@@ -27,51 +44,77 @@ async function runCycle(): Promise<void> {
       payments: normalizePayments(ingested),
     };
 
-    // Load to DB
     await writeIngestedData(pool, normalizedData);
-    
-    // Broadcast update
-    broadcastRealtimeUpdate({ 
-      network, 
-      ledger: normalizedData.ledger.sequence, 
+
+    broadcastRealtimeUpdate({
+      network: config.network,
+      ledger: normalizedData.ledger.sequence,
       txCount: normalizedData.transactions.length,
-      at: new Date().toISOString() 
+      at: new Date().toISOString(),
     });
-    
-    console.log(`[indexer] successfully processed ledger ${normalizedData.ledger.sequence}`);
-  } catch (error) {
-    console.error("[indexer] cycle error:", error);
+
+    indexerLogger.info(
+      {
+        network: config.network,
+        sequence: normalizedData.ledger.sequence,
+        txCount: normalizedData.transactions.length,
+      },
+      "Ledger processed"
+    );
+  } catch (error: any) {
+    indexerLogger.error(
+      { error: error?.message ?? String(error) },
+      "Cycle error"
+    );
   }
 }
 
-import http from "http";
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  console.log(`[indexer] starting on ${String(network)}`);
-  
-  // Health Check Server
-  http.createServer((req, res) => {
-    if (req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", network, time: new Date().toISOString() }));
-    } else {
-      res.writeHead(404);
-      res.end();
-    }
-  }).listen(3001, () => {
-    console.log("[indexer] health check operational on port 3001");
-  });
+  indexerLogger.info(
+    { network: config.network, pollIntervalMs: config.pollIntervalMs },
+    "Indexer starting"
+  );
+
+  // Health check server
+  http
+    .createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            network: config.network,
+            time: new Date().toISOString(),
+          })
+        );
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    })
+    .listen(config.healthPort, () => {
+      indexerLogger.info(
+        { port: config.healthPort },
+        "Health check server listening"
+      );
+    });
 
   // Initial run
   await runCycle();
-  
-  // Polling loop (every 5 seconds)
+
+  // Polling loop
   setInterval(() => {
-    runCycle().catch(console.error);
-  }, 5000);
+    runCycle().catch((err) =>
+      indexerLogger.error({ error: err?.message }, "Unhandled cycle error")
+    );
+  }, config.pollIntervalMs);
 }
 
-main().catch((error) => {
-  console.error("[indexer] fatal error:", error);
+main().catch((error: any) => {
+  indexerLogger.fatal({ error: error?.message ?? String(error) }, "Fatal error");
   process.exit(1);
 });

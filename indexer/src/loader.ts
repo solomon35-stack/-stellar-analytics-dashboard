@@ -1,8 +1,9 @@
 import pg from "pg";
+import { loaderLogger } from "./logger.js";
 
 export async function writeIngestedData(pool: any, data: any) {
   if (!pool) {
-    console.warn("[loader] database pool not configured, skipping write");
+    loaderLogger.warn("Database pool not configured, skipping write");
     return;
   }
 
@@ -36,15 +37,28 @@ export async function writeIngestedData(pool: any, data: any) {
     // 4. Write payments
     for (const p of data.payments) {
       await client.query(
-         "INSERT INTO payments (id, \"from\", \"to\", amount, asset) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
-         [p.id, p.from, p.to, p.amount, p.asset]
+        'INSERT INTO payments (id, "from", "to", amount, asset) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
+        [p.id, p.from, p.to, p.amount, p.asset]
       );
     }
 
     await client.query("COMMIT");
-  } catch (error) {
+
+    loaderLogger.debug(
+      {
+        ledgerSequence: ledger.sequence,
+        txCount: data.transactions.length,
+        opCount: data.operations.length,
+        paymentCount: data.payments.length,
+      },
+      "Wrote ingested data to database"
+    );
+  } catch (error: any) {
     await client.query("ROLLBACK");
-    console.error("[loader] failed to write to database:", error);
+    loaderLogger.error(
+      { error: error?.message ?? String(error), ledgerSequence: data?.ledger?.sequence },
+      "Failed to write to database"
+    );
     throw error;
   } finally {
     client.release();
