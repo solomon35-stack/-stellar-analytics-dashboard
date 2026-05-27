@@ -284,31 +284,32 @@ export function AccountDetail() {
         <button
           onClick={() => navigate('/accounts')}
           className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Back to Accounts list"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to Accounts
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="group" aria-label="Export options">
           <button
             onClick={() => handleExport('csv')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Export to CSV"
+            aria-label="Export account data as CSV"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-4 w-4" aria-hidden="true" />
           </button>
           <button
             onClick={() => handleExport('json')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Export to JSON"
+            aria-label="Export account data as JSON"
           >
-            <FileText className="h-4 w-4" />
+            <FileText className="h-4 w-4" aria-hidden="true" />
           </button>
           <button
             onClick={handleShare}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Share link"
+            aria-label="Share link to this account"
           >
-            <Share2 className="h-4 w-4" />
+            <Share2 className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -318,20 +319,23 @@ export function AccountDetail() {
         <div className="flex items-start justify-between">
           <div className="space-y-2">
             <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
-              <Wallet className="h-8 w-8" />
+              <Wallet className="h-8 w-8" aria-hidden="true" />
               Account Profile
             </h1>
             <div className="flex items-center gap-2 text-muted-foreground">
-              <span className="font-mono text-sm">{accountId}</span>
+              <span className="font-mono text-sm" aria-label={`Account ID: ${accountId}`}>
+                {accountId}
+              </span>
               <button
                 onClick={handleCopy}
                 className="p-1 hover:text-foreground transition-colors"
-                title="Copy account ID"
+                aria-label={copied ? 'Account ID copied' : 'Copy account ID to clipboard'}
+                aria-live="polite"
               >
                 {copied ? (
                   <span className="text-green-500 text-xs">Copied!</span>
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <Copy className="h-4 w-4" aria-hidden="true" />
                 )}
               </button>
               <a
@@ -339,16 +343,17 @@ export function AccountDetail() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-1 hover:text-foreground transition-colors"
-                title="View on StellarExpert"
+                aria-label="View this account on StellarExpert (opens in new tab)"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="h-4 w-4" aria-hidden="true" />
               </a>
             </div>
           </div>
           <div className="text-right">
-            <div className="text-sm text-muted-foreground">Status</div>
+            <div className="text-sm text-muted-foreground" id="account-status-label">Status</div>
             <div
               className={`font-semibold ${metrics?.isActive ? 'text-green-500' : 'text-yellow-500'}`}
+              aria-labelledby="account-status-label"
             >
               {metrics?.isActive ? 'Active' : 'Inactive'}
             </div>
@@ -356,24 +361,24 @@ export function AccountDetail() {
         </div>
 
         {/* Quick Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <dl className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Sequence</div>
-            <div className="font-mono text-lg">{account?.sequenceNumber}</div>
+            <dt className="text-sm text-muted-foreground">Sequence</dt>
+            <dd className="font-mono text-lg">{account?.sequenceNumber}</dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Subentries</div>
-            <div className="font-mono text-lg">{account?.numSubentries}</div>
+            <dt className="text-sm text-muted-foreground">Subentries</dt>
+            <dd className="font-mono text-lg">{account?.numSubentries}</dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Signers</div>
-            <div className="font-mono text-lg">{account?.signers.length}</div>
+            <dt className="text-sm text-muted-foreground">Signers</dt>
+            <dd className="font-mono text-lg">{account?.signers.length}</dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Trustlines</div>
-            <div className="font-mono text-lg">{metrics?.trustlines}</div>
+            <dt className="text-sm text-muted-foreground">Trustlines</dt>
+            <dd className="font-mono text-lg">{metrics?.trustlines}</dd>
           </div>
-        </div>
+        </dl>
       </div>
 
       {/* Metrics Grid */}
@@ -385,105 +390,112 @@ export function AccountDetail() {
 
       {/* Tabs */}
       <div className="border-b">
-        <div className="flex gap-6">
-          <button
-            onClick={() => setActiveTab('transactions')}
-            className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
-              activeTab === 'transactions'
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Transactions
-          </button>
-          <button
-            onClick={() => setActiveTab('balances')}
-            className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
-              activeTab === 'balances'
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Balances
-          </button>
-          <button
-            onClick={() => setActiveTab('signers')}
-            className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
-              activeTab === 'signers'
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Signers
-          </button>
+        <div role="tablist" aria-label="Account details sections" className="flex gap-6">
+          {(['transactions', 'balances', 'signers'] as const).map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              id={`tab-${tab}`}
+              aria-selected={activeTab === tab}
+              aria-controls={`tabpanel-${tab}`}
+              onClick={() => setActiveTab(tab)}
+              className={`pb-3 px-1 font-medium transition-colors border-b-2 capitalize ${
+                activeTab === tab
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tab === 'transactions' ? 'Transactions' : tab === 'balances' ? 'Balances' : 'Signers'}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Tab Content */}
       {activeTab === 'transactions' && (
-        <div className="rounded-lg border bg-card">
+        <div
+          role="tabpanel"
+          id="tabpanel-transactions"
+          aria-labelledby="tab-transactions"
+          className="rounded-lg border bg-card"
+        >
           <div className="p-4 border-b flex items-center justify-between">
             <h2 className="text-lg font-semibold">Transaction History</h2>
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm text-muted-foreground" aria-live="polite">
               {transactionsData?.transactions.totalCount || 0} total transactions
             </span>
           </div>
           {txLoading ? (
-            <div className="p-8 text-center">
+            <div
+              className="p-8 text-center"
+              role="status"
+              aria-label="Loading transactions"
+              aria-busy="true"
+            >
               <div className="loading-skeleton h-8 w-full" />
             </div>
           ) : transactions.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">No transactions found</div>
           ) : (
-            <div className="divide-y">
+            <ul className="divide-y" role="list" aria-label="Transaction history">
               {transactions.map((tx) => (
-                <div
-                  key={tx.id}
-                  onClick={() => navigate(`/transactions/${tx.hash}`)}
-                  className="p-4 hover:bg-accent/50 cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {tx.successful ? (
-                        <TrendingUp className="h-5 w-5 text-green-500" />
-                      ) : (
-                        <TrendingDown className="h-5 w-5 text-red-500" />
-                      )}
-                      <div>
-                        <div className="font-mono text-sm">{formatAccountId(tx.hash)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          Ledger {tx.ledger} • {format(new Date(tx.createdAt), 'MMM dd, HH:mm')}
+                <li key={tx.id}>
+                  <button
+                    onClick={() => navigate(`/transactions/${tx.hash}`)}
+                    className="w-full p-4 hover:bg-accent/50 cursor-pointer transition-colors text-left"
+                    aria-label={`Transaction ${tx.hash}, ${tx.successful ? 'successful' : 'failed'}, ledger ${tx.ledger}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {tx.successful ? (
+                          <TrendingUp className="h-5 w-5 text-green-500" aria-hidden="true" />
+                        ) : (
+                          <TrendingDown className="h-5 w-5 text-red-500" aria-hidden="true" />
+                        )}
+                        <div>
+                          <div className="font-mono text-sm">{formatAccountId(tx.hash)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Ledger {tx.ledger} •{' '}
+                            <time dateTime={tx.createdAt}>
+                              {format(new Date(tx.createdAt), 'MMM dd, HH:mm')}
+                            </time>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">
-                        {(tx.feeCharged / 1000000).toFixed(5)} XLM
+                      <div className="text-right">
+                        <div className="text-sm font-medium">
+                          {(tx.feeCharged / 1000000).toFixed(5)} XLM
+                        </div>
+                        <div className="text-xs text-muted-foreground">{tx.operationCount} ops</div>
                       </div>
-                      <div className="text-xs text-muted-foreground">{tx.operationCount} ops</div>
                     </div>
-                  </div>
-                  {tx.memo && (
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      <span className="font-medium">Memo:</span> {tx.memo}
-                    </div>
-                  )}
-                </div>
+                    {tx.memo && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        <span className="font-medium">Memo:</span> {tx.memo}
+                      </div>
+                    )}
+                  </button>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       )}
 
       {activeTab === 'balances' && (
-        <div className="rounded-lg border bg-card">
+        <div
+          role="tabpanel"
+          id="tabpanel-balances"
+          aria-labelledby="tab-balances"
+          className="rounded-lg border bg-card"
+        >
           <div className="p-4 border-b">
             <h2 className="text-lg font-semibold">Balances</h2>
           </div>
-          <div className="divide-y">
-            <div className="p-4 flex items-center justify-between">
+          <ul className="divide-y" role="list">
+            <li className="p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Coins className="h-5 w-5 text-yellow-500" />
+                <Coins className="h-5 w-5 text-yellow-500" aria-hidden="true" />
                 <div>
                   <div className="font-medium">XLM (Native)</div>
                   <div className="text-xs text-muted-foreground">Stellar's native asset</div>
@@ -494,21 +506,26 @@ export function AccountDetail() {
                   {parseFloat(account?.balance || '0').toLocaleString()} XLM
                 </div>
               </div>
-            </div>
-          </div>
+            </li>
+          </ul>
         </div>
       )}
 
       {activeTab === 'signers' && (
-        <div className="rounded-lg border bg-card">
+        <div
+          role="tabpanel"
+          id="tabpanel-signers"
+          aria-labelledby="tab-signers"
+          className="rounded-lg border bg-card"
+        >
           <div className="p-4 border-b">
             <h2 className="text-lg font-semibold">Signers</h2>
           </div>
-          <div className="divide-y">
+          <ul className="divide-y" role="list">
             {account?.signers.map((signer, index) => (
-              <div key={index} className="p-4 flex items-center justify-between">
+              <li key={index} className="p-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <Users className="h-5 w-5 text-muted-foreground" />
+                  <Users className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                   <div>
                     <div className="font-mono text-sm">{signer.key}</div>
                     <div className="text-xs text-muted-foreground">
@@ -519,44 +536,52 @@ export function AccountDetail() {
                 <div className="text-right">
                   <div className="font-medium">Weight: {signer.weight}</div>
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
 
       {/* Account Details */}
-      <div className="rounded-lg border bg-card">
+      <section aria-labelledby="account-details-heading" className="rounded-lg border bg-card">
         <div className="p-4 border-b">
-          <h2 className="text-lg font-semibold">Account Details</h2>
+          <h2 id="account-details-heading" className="text-lg font-semibold">Account Details</h2>
         </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <dl className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <div className="text-sm text-muted-foreground">Created</div>
-            <div className="font-medium">
-              {account?.createdAt && format(new Date(account.createdAt), 'MMM dd, yyyy HH:mm')}
-            </div>
+            <dt className="text-sm text-muted-foreground">Created</dt>
+            <dd className="font-medium">
+              {account?.createdAt && (
+                <time dateTime={account.createdAt}>
+                  {format(new Date(account.createdAt), 'MMM dd, yyyy HH:mm')}
+                </time>
+              )}
+            </dd>
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">Last Modified</div>
-            <div className="font-medium">
-              {account?.updatedAt && format(new Date(account.updatedAt), 'MMM dd, yyyy HH:mm')}
-            </div>
+            <dt className="text-sm text-muted-foreground">Last Modified</dt>
+            <dd className="font-medium">
+              {account?.updatedAt && (
+                <time dateTime={account.updatedAt}>
+                  {format(new Date(account.updatedAt), 'MMM dd, yyyy HH:mm')}
+                </time>
+              )}
+            </dd>
           </div>
           {account?.sponsor && (
             <>
               <div>
-                <div className="text-sm text-muted-foreground">Sponsor</div>
-                <div className="font-mono text-sm">{account.sponsor}</div>
+                <dt className="text-sm text-muted-foreground">Sponsor</dt>
+                <dd className="font-mono text-sm">{account.sponsor}</dd>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground">Sponsoring</div>
-                <div className="font-medium">{account.numSponsoring} accounts</div>
+                <dt className="text-sm text-muted-foreground">Sponsoring</dt>
+                <dd className="font-medium">{account.numSponsoring} accounts</dd>
               </div>
             </>
           )}
-        </div>
-      </div>
+        </dl>
+      </section>
     </div>
   );
 }

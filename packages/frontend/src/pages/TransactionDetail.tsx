@@ -225,31 +225,32 @@ export function TransactionDetail() {
         <button
           onClick={() => navigate('/transactions')}
           className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Back to Transactions list"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to Transactions
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="group" aria-label="Export options">
           <button
             onClick={() => handleExport('csv')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Export to CSV"
+            aria-label="Export transaction as CSV"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-4 w-4" aria-hidden="true" />
           </button>
           <button
             onClick={() => handleExport('json')}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Export to JSON"
+            aria-label="Export transaction as JSON"
           >
-            <FileText className="h-4 w-4" />
+            <FileText className="h-4 w-4" aria-hidden="true" />
           </button>
           <button
             onClick={handleShare}
             className="p-2 rounded-lg border bg-card hover:bg-accent transition-colors"
-            title="Share link"
+            aria-label="Share link to this transaction"
           >
-            <Share2 className="h-4 w-4" />
+            <Share2 className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -267,12 +268,13 @@ export function TransactionDetail() {
               <button
                 onClick={() => handleCopy(tx?.hash || '', 'hash')}
                 className="p-1 hover:text-foreground transition-colors"
-                title="Copy transaction hash"
+                aria-label={copied === 'hash' ? 'Hash copied' : 'Copy transaction hash'}
+                aria-live="polite"
               >
                 {copied === 'hash' ? (
                   <span className="text-green-500 text-xs">Copied!</span>
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <Copy className="h-4 w-4" aria-hidden="true" />
                 )}
               </button>
               <a
@@ -280,9 +282,9 @@ export function TransactionDetail() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-1 hover:text-foreground transition-colors"
-                title="View on StellarExpert"
+                aria-label="View this transaction on StellarExpert (opens in new tab)"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="h-4 w-4" aria-hidden="true" />
               </a>
             </div>
           </div>
@@ -305,32 +307,36 @@ export function TransactionDetail() {
         </div>
 
         {/* Quick Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <dl className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Ledger</div>
-            <div className="font-mono text-lg">{tx?.ledger}</div>
+            <dt className="text-sm text-muted-foreground">Ledger</dt>
+            <dd className="font-mono text-lg">{tx?.ledger}</dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Operations</div>
-            <div className="font-mono text-lg">{tx?.operationCount}</div>
+            <dt className="text-sm text-muted-foreground">Operations</dt>
+            <dd className="font-mono text-lg">{tx?.operationCount}</dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Fee Charged</div>
-            <div className="font-mono text-lg">
+            <dt className="text-sm text-muted-foreground">Fee Charged</dt>
+            <dd className="font-mono text-lg">
               {tx ? (tx.feeCharged / 1000000).toFixed(5) : 0} XLM
-            </div>
+            </dd>
           </div>
           <div className="p-4 rounded-lg bg-accent/50">
-            <div className="text-sm text-muted-foreground">Max Fee</div>
-            <div className="font-mono text-lg">{tx ? (tx.maxFee / 1000000).toFixed(5) : 0} XLM</div>
+            <dt className="text-sm text-muted-foreground">Max Fee</dt>
+            <dd className="font-mono text-lg">{tx ? (tx.maxFee / 1000000).toFixed(5) : 0} XLM</dd>
           </div>
-        </div>
+        </dl>
       </div>
 
       {/* Tabs */}
       <div className="border-b">
-        <div className="flex gap-6">
+        <div role="tablist" aria-label="Transaction detail sections" className="flex gap-6">
           <button
+            role="tab"
+            id="tab-overview"
+            aria-selected={activeTab === 'overview'}
+            aria-controls="tabpanel-overview"
             onClick={() => setActiveTab('overview')}
             className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
               activeTab === 'overview'
@@ -341,6 +347,10 @@ export function TransactionDetail() {
             Overview
           </button>
           <button
+            role="tab"
+            id="tab-operations"
+            aria-selected={activeTab === 'operations'}
+            aria-controls="tabpanel-operations"
             onClick={() => setActiveTab('operations')}
             className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
               activeTab === 'operations'
@@ -351,6 +361,10 @@ export function TransactionDetail() {
             Operations ({tx?.operations.length || 0})
           </button>
           <button
+            role="tab"
+            id="tab-xdr"
+            aria-selected={activeTab === 'xdr'}
+            aria-controls="tabpanel-xdr"
             onClick={() => setActiveTab('xdr')}
             className={`pb-3 px-1 font-medium transition-colors border-b-2 ${
               activeTab === 'xdr'
@@ -365,7 +379,7 @@ export function TransactionDetail() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <div className="space-y-4">
+        <div role="tabpanel" id="tabpanel-overview" aria-labelledby="tab-overview" className="space-y-4">
           {/* Source Account */}
           <div className="rounded-lg border bg-card">
             <div className="p-4 border-b">
@@ -460,7 +474,7 @@ export function TransactionDetail() {
       )}
 
       {activeTab === 'operations' && (
-        <div className="rounded-lg border bg-card">
+        <div role="tabpanel" id="tabpanel-operations" aria-labelledby="tab-operations" className="rounded-lg border bg-card">
           <div className="p-4 border-b">
             <h2 className="text-lg font-semibold">Operations</h2>
           </div>
@@ -494,7 +508,7 @@ export function TransactionDetail() {
       )}
 
       {activeTab === 'xdr' && (
-        <div className="space-y-4">
+        <div role="tabpanel" id="tabpanel-xdr" aria-labelledby="tab-xdr" className="space-y-4">
           {/* Envelope XDR */}
           <div className="rounded-lg border bg-card">
             <div className="p-4 border-b flex items-center justify-between">

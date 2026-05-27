@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client';
 import { TRANSACTIONS_QUERY } from '@/graphql/queries';
@@ -9,6 +9,8 @@ import { CheckCircle2, XCircle, Search, RefreshCcw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useFilterSort } from '@/hooks/useFilterSort';
 import type { FilterPreset } from '@/components/FilterBar';
+import { transactionFiltersSchema } from '@/lib/validation';
+import { clsx } from 'clsx';
 
 // ── filter defaults ──────────────────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ function clientSort(txs: any[], field: string, dir: 'asc' | 'desc') {
 
 export function Transactions() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [filterErrors, setFilterErrors] = useState<Record<string, string>>({});
   const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
     useFilterSort<TxFilters>({
       defaults: DEFAULTS,
@@ -129,6 +132,20 @@ export function Transactions() {
   const sorted = clientSort(searched, sort.field, sort.dir);
 
   // ── presets ────────────────────────────────────────────────────────────────
+
+  const validateFilters = (updated: TxFilters) => {
+    const result = transactionFiltersSchema.safeParse(updated);
+    if (!result.success) {
+      const errs: Record<string, string> = {};
+      result.error.errors.forEach((e) => {
+        const key = e.path[0] as string;
+        errs[key] = e.message;
+      });
+      setFilterErrors(errs);
+    } else {
+      setFilterErrors({});
+    }
+  };
 
   const presets: FilterPreset[] = [
     {
@@ -265,14 +282,23 @@ export function Transactions() {
         <input
           type="text"
           placeholder="Search by hash or source account…"
-          className="w-full pl-9 pr-4 py-2.5 bg-card border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+          aria-label="Search transactions"
+          className={clsx(
+            'w-full pl-9 pr-4 py-2.5 bg-card border rounded-xl focus:outline-none focus:ring-2 text-sm',
+            filterErrors.search
+              ? 'border-destructive focus:ring-destructive/30'
+              : 'border-border focus:ring-primary/30'
+          )}
           value={filters.search}
-          onChange={(e) => setFilter('search', e.target.value)}
+          onChange={(e) => {
+            setFilter('search', e.target.value);
+            if (filterErrors.search) setFilterErrors((prev) => ({ ...prev, search: '' }));
+          }}
         />
       </div>
 
       {/* Filter bar */}
-      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+      <FilterBar activeCount={activeCount} onReset={() => { resetFilters(); setFilterErrors({}); }} presets={presets}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
           <FilterRow label="Status">
             <ToggleGroup
@@ -303,6 +329,7 @@ export function Transactions() {
               value={filters.memoType}
               onChange={(e) => setFilter('memoType', e.target.value)}
               className="px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              aria-label="Filter by memo type"
             >
               <option value="">Any</option>
               <option value="none">None</option>
@@ -317,9 +344,16 @@ export function Transactions() {
             <RangeInput
               minValue={filters.minFee}
               maxValue={filters.maxFee}
-              onMinChange={(v) => setFilter('minFee', v)}
-              onMaxChange={(v) => setFilter('maxFee', v)}
+              onMinChange={(v) => {
+                setFilter('minFee', v);
+                validateFilters({ ...filters, minFee: v });
+              }}
+              onMaxChange={(v) => {
+                setFilter('maxFee', v);
+                validateFilters({ ...filters, maxFee: v });
+              }}
               placeholder={{ min: '0', max: '∞' }}
+              maxError={filterErrors.maxFee}
             />
           </FilterRow>
 
@@ -327,8 +361,15 @@ export function Transactions() {
             <DateRangeInput
               startValue={filters.startTime}
               endValue={filters.endTime}
-              onStartChange={(v) => setFilter('startTime', v)}
-              onEndChange={(v) => setFilter('endTime', v)}
+              onStartChange={(v) => {
+                setFilter('startTime', v);
+                validateFilters({ ...filters, startTime: v });
+              }}
+              onEndChange={(v) => {
+                setFilter('endTime', v);
+                validateFilters({ ...filters, endTime: v });
+              }}
+              endError={filterErrors.endTime}
             />
           </FilterRow>
         </div>
@@ -336,6 +377,7 @@ export function Transactions() {
 
       {/* Table */}
       <DataTable
+        caption="Transactions"
         columns={columns}
         data={sorted}
         loading={loading}

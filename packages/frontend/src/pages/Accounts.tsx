@@ -1,14 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client';
 import { format } from 'date-fns';
 import { Search, Wallet, Share2, Clock, Download, FileText } from 'lucide-react';
-import { useState } from 'react';
 import { ACCOUNTS_QUERY } from '@/graphql/queries';
 import { DataTable } from '@/components/DataTable';
 import { FilterBar, FilterRow, ToggleGroup, RangeInput } from '@/components/FilterBar';
 import { useFilterSort } from '@/hooks/useFilterSort';
 import type { FilterPreset } from '@/components/FilterBar';
+import { ValidationMessage } from '@/components/ValidationMessage';
+import { accountFiltersSchema } from '@/lib/validation';
+import { clsx } from 'clsx';
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -107,6 +109,7 @@ export function Accounts() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [copied, setCopied] = useState<string | null>(null);
+  const [filterErrors, setFilterErrors] = useState<Record<string, string>>({});
 
   const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
     useFilterSort<AccountFilters>({
@@ -144,6 +147,22 @@ export function Accounts() {
     navigator.clipboard.writeText(text);
     setCopied(text);
     setTimeout(() => setCopied(null), 2000);
+  };
+
+  /** Validate filters and update error state; returns true if valid */
+  const validateFilters = (updated: AccountFilters) => {
+    const result = accountFiltersSchema.safeParse(updated);
+    if (!result.success) {
+      const errs: Record<string, string> = {};
+      result.error.errors.forEach((e) => {
+        const key = e.path[0] as string;
+        errs[key] = e.message;
+      });
+      setFilterErrors(errs);
+      return false;
+    }
+    setFilterErrors({});
+    return true;
   };
 
   // ── presets ────────────────────────────────────────────────────────────────
@@ -268,22 +287,44 @@ export function Accounts() {
           type="text"
           placeholder="Search by account ID…"
           value={filters.search}
-          onChange={(e) => setFilter('search', e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-border bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+          onChange={(e) => {
+            setFilter('search', e.target.value);
+            if (filterErrors.search) setFilterErrors((prev) => ({ ...prev, search: '' }));
+          }}
+          onBlur={() => validateFilters(filters)}
+          aria-label="Search accounts by ID"
+          aria-invalid={!!filterErrors.search}
+          aria-describedby={filterErrors.search ? 'account-search-error' : undefined}
+          className={clsx(
+            'w-full pl-9 pr-4 py-2.5 rounded-xl border bg-card focus:outline-none focus:ring-2 text-sm',
+            filterErrors.search
+              ? 'border-destructive focus:ring-destructive/30'
+              : 'border-border focus:ring-primary/30'
+          )}
         />
+        {filterErrors.search && (
+          <ValidationMessage id="account-search-error" error={filterErrors.search} />
+        )}
       </div>
 
       {/* Filter bar */}
-      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+      <FilterBar activeCount={activeCount} onReset={() => { resetFilters(); setFilterErrors({}); }} presets={presets}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
           <FilterRow label="Balance (XLM)">
             <RangeInput
               minValue={filters.minBalance}
               maxValue={filters.maxBalance}
-              onMinChange={(v) => setFilter('minBalance', v)}
-              onMaxChange={(v) => setFilter('maxBalance', v)}
+              onMinChange={(v) => {
+                setFilter('minBalance', v);
+                validateFilters({ ...filters, minBalance: v });
+              }}
+              onMaxChange={(v) => {
+                setFilter('maxBalance', v);
+                validateFilters({ ...filters, maxBalance: v });
+              }}
               placeholder={{ min: '0', max: '∞' }}
               unit="XLM"
+              maxError={filterErrors.maxBalance}
             />
           </FilterRow>
 

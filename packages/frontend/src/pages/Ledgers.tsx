@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client';
 import { LEDGERS_QUERY } from '@/graphql/queries';
@@ -18,6 +18,7 @@ import { Database, Activity, Cpu } from 'lucide-react';
 import { MetricCard } from '@/components/MetricCard';
 import { useFilterSort } from '@/hooks/useFilterSort';
 import type { FilterPreset } from '@/components/FilterBar';
+import { ledgerFiltersSchema } from '@/lib/validation';
 
 // ── filter defaults ───────────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ function clientSort(ledgers: any[], field: string, dir: 'asc' | 'desc') {
 
 export function Ledgers() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [filterErrors, setFilterErrors] = useState<Record<string, string>>({});
 
   const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
     useFilterSort<LedgerFilters>({
@@ -109,6 +111,20 @@ export function Ledgers() {
   }));
 
   // ── presets ────────────────────────────────────────────────────────────────
+
+  const validateFilters = (updated: LedgerFilters) => {
+    const result = ledgerFiltersSchema.safeParse(updated);
+    if (!result.success) {
+      const errs: Record<string, string> = {};
+      result.error.errors.forEach((e) => {
+        const key = e.path[0] as string;
+        errs[key] = e.message;
+      });
+      setFilterErrors(errs);
+    } else {
+      setFilterErrors({});
+    }
+  };
 
   const presets: FilterPreset[] = [
     {
@@ -263,14 +279,21 @@ export function Ledgers() {
       </div>
 
       {/* Filter bar */}
-      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+      <FilterBar activeCount={activeCount} onReset={() => { resetFilters(); setFilterErrors({}); }} presets={presets}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
           <FilterRow label="Time range">
             <DateRangeInput
               startValue={filters.startTime}
               endValue={filters.endTime}
-              onStartChange={(v) => setFilter('startTime', v)}
-              onEndChange={(v) => setFilter('endTime', v)}
+              onStartChange={(v) => {
+                setFilter('startTime', v);
+                validateFilters({ ...filters, startTime: v });
+              }}
+              onEndChange={(v) => {
+                setFilter('endTime', v);
+                validateFilters({ ...filters, endTime: v });
+              }}
+              endError={filterErrors.endTime}
             />
           </FilterRow>
 
@@ -278,9 +301,16 @@ export function Ledgers() {
             <RangeInput
               minValue={filters.minOps}
               maxValue={filters.maxOps}
-              onMinChange={(v) => setFilter('minOps', v)}
-              onMaxChange={(v) => setFilter('maxOps', v)}
+              onMinChange={(v) => {
+                setFilter('minOps', v);
+                validateFilters({ ...filters, minOps: v });
+              }}
+              onMaxChange={(v) => {
+                setFilter('maxOps', v);
+                validateFilters({ ...filters, maxOps: v });
+              }}
               placeholder={{ min: '0', max: '∞' }}
+              maxError={filterErrors.maxOps}
             />
           </FilterRow>
         </div>
@@ -288,6 +318,7 @@ export function Ledgers() {
 
       {/* Table */}
       <DataTable
+        caption="Ledgers"
         columns={columns}
         data={sorted}
         loading={loading}

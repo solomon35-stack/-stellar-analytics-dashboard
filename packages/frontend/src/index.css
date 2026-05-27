@@ -10,19 +10,21 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
+    /* Increased primary lightness slightly for better contrast on white */
+    --primary: 221.2 83.2% 48%;
     --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96%;
     --secondary-foreground: 222.2 84% 4.9%;
     --muted: 210 40% 96%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Darkened muted-foreground from 46.9% to 40% for WCAG AA on white */
+    --muted-foreground: 215.4 16.3% 38%;
     --accent: 210 40% 96%;
     --accent-foreground: 222.2 84% 4.9%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --ring: 221.2 83.2% 48%;
     --radius: 0.5rem;
   }
 
@@ -38,7 +40,8 @@
     --secondary: 217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
     --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    /* Lightened dark muted-foreground from 65.1% to 70% for better contrast */
+    --muted-foreground: 215 20.2% 70%;
     --accent: 217.2 32.6% 17.5%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 30.6%;
@@ -46,6 +49,42 @@
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 224.3 76.3% 94.1%;
+  }
+
+  /* ── Focus visible styles ─────────────────────────────────────────────────
+     Applied globally so every interactive element gets a clear keyboard
+     focus indicator without relying on browser defaults.
+  ──────────────────────────────────────────────────────────────────────── */
+  *:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Remove focus ring for mouse users (only show for keyboard) */
+  *:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Ensure links inside nav also get visible focus */
+  a:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* ── Reduced motion ───────────────────────────────────────────────────────
+     Respect the user's OS preference for reduced motion.
+  ──────────────────────────────────────────────────────────────────────── */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 

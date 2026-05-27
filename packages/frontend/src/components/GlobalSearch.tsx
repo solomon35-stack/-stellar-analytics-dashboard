@@ -20,6 +20,7 @@ import {
   SEARCH_LEDGERS_QUERY,
 } from '@/graphql/queries';
 import { useSearchHistory } from '@/hooks/useSearchHistory';
+import { getSearchHint } from '@/lib/validation';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -243,6 +244,8 @@ export function GlobalSearch() {
     return <Database className="h-4 w-4 text-purple-500" />;
   };
 
+  const searchHint = getSearchHint(query);
+
   return (
     <div ref={containerRef} className="relative w-full max-w-md">
       <form onSubmit={handleSubmit}>
@@ -259,8 +262,19 @@ export function GlobalSearch() {
             aria-label="Global search"
             aria-expanded={open}
             aria-haspopup="listbox"
+            aria-describedby={searchHint ? 'global-search-hint' : undefined}
             className="w-full bg-muted/40 border border-transparent rounded-xl py-2 pl-10 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/30 transition-all placeholder:text-muted-foreground/60"
           />
+          {/* Inline format hint shown below the input when dropdown is closed */}
+          {searchHint && !open && (
+            <p
+              id="global-search-hint"
+              className="absolute left-0 top-full mt-1 text-[10px] text-muted-foreground px-1"
+              aria-live="polite"
+            >
+              {searchHint}
+            </p>
+          )}
           {/* Right side: loading / clear / shortcut hint */}
           <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
             {searching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
@@ -291,7 +305,7 @@ export function GlobalSearch() {
       {(showHistory || showResults) && (
         <div
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150"
+          className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150 max-h-[70vh] overflow-y-auto"
         >
           {/* ── Search results ── */}
           {showResults && (

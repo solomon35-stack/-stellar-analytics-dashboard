@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client';
 import { ASSET_METRICS_QUERY } from '@/graphql/queries';
 import { DataTable } from '@/components/DataTable';
@@ -8,6 +8,8 @@ import { Coins, ArrowRightLeft, DollarSign, RefreshCcw, Search } from 'lucide-re
 import { MetricCard } from '@/components/MetricCard';
 import { useFilterSort } from '@/hooks/useFilterSort';
 import type { FilterPreset } from '@/components/FilterBar';
+import { assetFiltersSchema } from '@/lib/validation';
+import { clsx } from 'clsx';
 
 // ── filter defaults ───────────────────────────────────────────────────────────
 
@@ -54,6 +56,7 @@ function clientSort(assets: any[], field: string, dir: 'asc' | 'desc') {
 // ── component ─────────────────────────────────────────────────────────────────
 
 export function Assets() {
+  const [filterErrors, setFilterErrors] = useState<Record<string, string>>({});
   const { filters, sort, setFilter, setSort, resetFilters, activeCount } =
     useFilterSort<AssetFilters>({
       defaults: DEFAULTS,
@@ -101,6 +104,20 @@ export function Assets() {
   }));
 
   // ── presets ────────────────────────────────────────────────────────────────
+
+  const validateFilters = (updated: AssetFilters) => {
+    const result = assetFiltersSchema.safeParse(updated);
+    if (!result.success) {
+      const errs: Record<string, string> = {};
+      result.error.errors.forEach((e) => {
+        const key = e.path[0] as string;
+        errs[key] = e.message;
+      });
+      setFilterErrors(errs);
+    } else {
+      setFilterErrors({});
+    }
+  };
 
   const presets: FilterPreset[] = [
     {
@@ -239,12 +256,13 @@ export function Assets() {
           placeholder="Search by asset code…"
           value={filters.search}
           onChange={(e) => setFilter('search', e.target.value)}
+          aria-label="Search assets by code"
           className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-border bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
         />
       </div>
 
       {/* Filter bar */}
-      <FilterBar activeCount={activeCount} onReset={resetFilters} presets={presets}>
+      <FilterBar activeCount={activeCount} onReset={() => { resetFilters(); setFilterErrors({}); }} presets={presets}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
           <FilterRow label="Asset type">
             <ToggleGroup
@@ -263,22 +281,44 @@ export function Assets() {
             <RangeInput
               minValue={filters.minVolume}
               maxValue={filters.maxVolume}
-              onMinChange={(v) => setFilter('minVolume', v)}
-              onMaxChange={(v) => setFilter('maxVolume', v)}
+              onMinChange={(v) => {
+                setFilter('minVolume', v);
+                validateFilters({ ...filters, minVolume: v });
+              }}
+              onMaxChange={(v) => {
+                setFilter('maxVolume', v);
+                validateFilters({ ...filters, maxVolume: v });
+              }}
               placeholder={{ min: '0', max: '∞' }}
               unit="XLM"
+              maxError={filterErrors.maxVolume}
             />
           </FilterRow>
 
           <FilterRow label="Min holders">
-            <input
-              type="number"
-              min="0"
-              value={filters.minHolders}
-              onChange={(e) => setFilter('minHolders', e.target.value)}
-              placeholder="0"
-              className="w-28 px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
+            <div className="flex flex-col gap-0.5">
+              <input
+                type="number"
+                min="0"
+                value={filters.minHolders}
+                onChange={(e) => {
+                  setFilter('minHolders', e.target.value);
+                  validateFilters({ ...filters, minHolders: e.target.value });
+                }}
+                placeholder="0"
+                aria-label="Minimum number of holders"
+                aria-invalid={!!filterErrors.minHolders}
+                className={clsx(
+                  'w-28 px-3 py-1.5 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2',
+                  filterErrors.minHolders
+                    ? 'border-destructive focus:ring-destructive/30'
+                    : 'border-border focus:ring-primary/30'
+                )}
+              />
+              {filterErrors.minHolders && (
+                <span className="text-[10px] text-destructive">{filterErrors.minHolders}</span>
+              )}
+            </div>
           </FilterRow>
         </div>
       </FilterBar>

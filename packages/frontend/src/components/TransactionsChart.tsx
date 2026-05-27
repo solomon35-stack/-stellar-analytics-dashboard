@@ -298,7 +298,7 @@ export function TransactionsChart() {
   return (
     <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
       {/* ── Header ── */}
-      <div className="px-6 pt-5 pb-4 border-b border-border/60">
+      <div className="px-4 pt-4 pb-3 sm:px-6 sm:pt-5 sm:pb-4 border-b border-border/60">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-bold tracking-tight">Transaction Volume</h3>
@@ -307,31 +307,31 @@ export function TransactionsChart() {
             </p>
           </div>
 
-          {/* Summary strip */}
+          {/* Summary strip — scrollable on mobile */}
           {summary && (
-            <div className="flex items-center gap-4 text-xs">
-              <div className="text-center">
+            <div className="flex items-center gap-3 sm:gap-4 text-xs overflow-x-auto pb-0.5 sm:pb-0">
+              <div className="text-center shrink-0">
                 <div className="font-bold tabular-nums text-foreground">
                   {summary.total.toLocaleString()}
                 </div>
                 <div className="text-muted-foreground">Total txs</div>
               </div>
-              <div className="h-6 w-px bg-border" />
-              <div className="text-center">
+              <div className="h-6 w-px bg-border shrink-0" />
+              <div className="text-center shrink-0">
                 <div className="font-bold tabular-nums text-foreground">
                   {summary.avgFee.toFixed(0)} str
                 </div>
                 <div className="text-muted-foreground">Avg fee</div>
               </div>
-              <div className="h-6 w-px bg-border" />
-              <div className="text-center">
+              <div className="h-6 w-px bg-border shrink-0" />
+              <div className="text-center shrink-0">
                 <div className={clsx('font-bold tabular-nums flex items-center gap-0.5', summary.avgSuccess >= 99 ? 'text-green-500' : 'text-yellow-500')}>
                   {summary.avgSuccess.toFixed(1)}%
                 </div>
                 <div className="text-muted-foreground">Success</div>
               </div>
-              <div className="h-6 w-px bg-border" />
-              <div className="text-center">
+              <div className="h-6 w-px bg-border shrink-0" />
+              <div className="text-center shrink-0">
                 <div className={clsx('font-bold tabular-nums flex items-center gap-0.5 justify-center', summary.trend > 0 ? 'text-green-500' : summary.trend < 0 ? 'text-red-500' : 'text-muted-foreground')}>
                   {summary.trend > 0 ? <TrendingUp className="h-3 w-3" /> : summary.trend < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
                   {Math.abs(summary.trend)}
@@ -342,16 +342,18 @@ export function TransactionsChart() {
           )}
         </div>
 
-        {/* Controls row */}
-        <div className="flex flex-wrap items-center gap-3 mt-4">
+        {/* Controls row — scrollable on mobile */}
+        <div className="flex items-center gap-2 mt-4 overflow-x-auto pb-0.5">
           {/* Time range tabs */}
-          <div className="flex items-center gap-0.5 bg-muted/50 p-0.5 rounded-lg border border-border">
+          <div className="flex items-center gap-0.5 bg-muted/50 p-0.5 rounded-lg border border-border shrink-0">
             {TIME_RANGES.map((r) => (
               <button
                 key={r.value}
                 onClick={() => setTimeRange(r.value)}
+                aria-pressed={timeRange === r.value}
+                aria-label={`Show ${r.label} time range`}
                 className={clsx(
-                  'px-3 py-1 rounded-md text-xs font-bold transition-all',
+                  'px-2.5 py-1.5 rounded-md text-xs font-bold transition-all min-h-[32px]',
                   timeRange === r.value
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
@@ -363,21 +365,23 @@ export function TransactionsChart() {
           </div>
 
           {/* Metric toggle */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {METRICS.map((m) => (
               <button
                 key={m.key}
                 onClick={() => setActiveMetric(m.key)}
+                aria-pressed={activeMetric === m.key}
+                aria-label={`Show ${m.label} metric`}
                 style={activeMetric === m.key ? { borderColor: m.color, color: m.color, backgroundColor: `${m.color}15` } : {}}
                 className={clsx(
-                  'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all',
+                  'flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium border transition-all min-h-[32px]',
                   activeMetric === m.key
                     ? 'border-current'
                     : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'
                 )}
               >
                 {m.icon}
-                {m.label}
+                <span className="hidden sm:inline">{m.label}</span>
               </button>
             ))}
           </div>
@@ -385,57 +389,59 @@ export function TransactionsChart() {
           {/* Success/fail overlay toggle */}
           <button
             onClick={() => setShowSuccessFail((v) => !v)}
+            aria-pressed={showSuccessFail}
+            aria-label="Toggle success/fail breakdown"
             className={clsx(
-              'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ml-auto',
+              'flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium border transition-all ml-auto shrink-0 min-h-[32px]',
               showSuccessFail
                 ? 'border-green-500/40 text-green-600 bg-green-500/10'
                 : 'border-border text-muted-foreground hover:text-foreground'
             )}
           >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Success/Fail
+            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">Success/Fail</span>
           </button>
 
           {/* Refresh */}
           <button
             onClick={() => refetch()}
             disabled={loading}
-            className="p-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            title="Refresh"
+            className="p-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 min-h-[32px] min-w-[32px] flex items-center justify-center"
+            aria-label="Refresh chart data"
           >
-            <RefreshCcw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+            <RefreshCcw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} aria-hidden="true" />
           </button>
 
           {/* Export */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={handleExportCSV}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              title="Export CSV"
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[32px]"
+              aria-label="Export chart data as CSV"
             >
-              <Download className="h-3.5 w-3.5" />
-              CSV
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">CSV</span>
             </button>
             <button
               onClick={handleExportPNG}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              title="Export PNG"
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[32px]"
+              aria-label="Export chart as PNG image"
             >
-              <ImageIcon className="h-3.5 w-3.5" />
-              PNG
+              <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">PNG</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* ── Chart ── */}
-      <div ref={chartRef} className="px-2 pt-4 pb-2">
+      <div ref={chartRef} className="px-1 pt-4 pb-2 sm:px-2">
         {loading && chartData.length === 0 ? (
-          <div className="h-72 flex items-center justify-center">
+          <div className="h-56 sm:h-72 flex items-center justify-center">
             <div className="h-full w-full bg-muted/20 animate-pulse rounded-xl" />
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={typeof window !== 'undefined' && window.innerWidth < 640 ? 220 : 300}>
             <ComposedChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="txGradient" x1="0" y1="0" x2="0" y2="1">
