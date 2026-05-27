@@ -1,6 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { createClient } from 'redis';
 import winston from 'winston';
+import { recordQueryExecution } from './query-monitor';
 
 // Cache TTL constants (in seconds)
 export const CACHE_TTL = {
@@ -97,9 +98,11 @@ export class DatabaseConnection {
   }
 
   public async query<T = any>(text: string, params?: any[]): Promise<T[]> {
+    const startedAt = performance.now();
     const client = await this.getClient();
     try {
       const result = await client.query(text, params);
+      recordQueryExecution(text, performance.now() - startedAt, result.rowCount, this.logger);
       return result.rows;
     } finally {
       client.release();

@@ -1,4 +1,12 @@
 import { GraphQLResolveInfo } from 'graphql';
+import { db } from '../database/connection';
+import { Connection, Edge } from '@stellar-analytics/shared';
+import { mapLedger } from '../utils/mappers';
+import type { ApiLoaders } from '../loaders';
+
+interface ResolverContext {
+  loaders: ApiLoaders;
+}
 import { db, CACHE_TTL } from '../database/connection';
 import { Connection, Edge, PageInfo } from '@stellar-analytics/shared';
 
@@ -83,25 +91,9 @@ export const ledgerResolvers = {
       const totalCount = parseInt(countResult.total);
 
       // Create edges
-      const edges: Edge<any>[] = ledgers.map((ledger, index) => ({
+      const edges: Edge<any>[] = ledgers.map((ledger) => ({
         cursor: ledger.sequence.toString(),
-        node: {
-          ...ledger,
-          closedAt: ledger.closed_at,
-          successfulTransactionCount: ledger.successful_transaction_count,
-          failedTransactionCount: ledger.failed_transaction_count,
-          operationCount: ledger.operation_count,
-          txSetOperationCount: ledger.tx_set_operation_count,
-          totalCoins: ledger.total_coins,
-          feePool: ledger.fee_pool,
-          baseFeeInStroops: ledger.base_fee_in_stroops,
-          baseReserveInStroops: ledger.base_reserve_in_stroops,
-          maxTxSetSize: ledger.max_tx_set_size,
-          protocolVersion: ledger.protocol_version,
-          headerXdr: ledger.header_xdr,
-          createdAt: ledger.created_at,
-          updatedAt: ledger.updated_at,
-        },
+        node: mapLedger(ledger),
       }));
 
 // Create page info
@@ -128,11 +120,13 @@ export const ledgerResolvers = {
     },
 
     ledger: async (
-      parent: any,
+      parent: unknown,
       args: { sequence: number },
-      context: any,
-      info: GraphQLResolveInfo
+      context: ResolverContext,
+      _info: GraphQLResolveInfo
     ) => {
+      const ledger = await context.loaders.ledgerLoader.load(args.sequence);
+      return ledger ? mapLedger(ledger) : null;
       const cacheKey = `ledger:${args.sequence}`;
 
       // Try cache first

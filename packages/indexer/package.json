@@ -11,6 +11,9 @@
     "clean": "rm -rf dist",
     "type-check": "tsc --noEmit",
     "db:migrate": "ts-node src/database/migrate.ts",
+    "db:migrate:down": "ts-node src/database/migrate.ts --down",
+    "db:migrate:create": "node-pg-migrate create -f .node-pg-migraterc",
+    "db:migrate:redo": "node-pg-migrate redo -f .node-pg-migraterc",
     "db:seed": "ts-node src/database/seed.ts",
     "test": "jest",
     "test:watch": "jest --watch"
@@ -18,6 +21,7 @@
   "dependencies": {
     "@stellar-analytics/shared": "workspace:*",
     "@stellar/stellar-sdk": "^11.0.0",
+    "node-pg-migrate": "^7.9.1",
     "pg": "^8.11.3",
     "redis": "^4.6.10",
     "ws": "^8.14.2",

@@ -8,7 +8,14 @@
     "dev:indexer": "pnpm --filter @stellar-analytics/indexer dev",
     "dev:api": "pnpm --filter @stellar-analytics/api dev",
     "dev:frontend": "pnpm --filter @stellar-analytics/frontend dev",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "backup:run": "docker compose run --rm -e RUN_ONCE=true postgres-backup",
+    "backup:verify": "docker compose run --rm postgres-backup /bin/sh /scripts/verify-latest-backup.sh",
+    "backup:health": "docker compose run --rm postgres-backup /bin/sh /scripts/check-backup-health.sh",
+    "db:migrate": "pnpm --filter @stellar-analytics/indexer db:migrate",
+    "db:migrate:down": "pnpm --filter @stellar-analytics/indexer db:migrate:down",
+    "db:migrate:create": "pnpm --filter @stellar-analytics/indexer db:migrate:create",
+    "db:explain": "sh scripts/database/analyze-query-plans.sh"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

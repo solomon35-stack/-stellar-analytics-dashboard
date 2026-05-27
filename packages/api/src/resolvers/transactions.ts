@@ -1,10 +1,17 @@
 import { GraphQLResolveInfo } from 'graphql';
+import { db } from '../database/connection';
+import { mapOperation, mapTransaction } from '../utils/mappers';
+import type { ApiLoaders } from '../loaders';
+
+interface ResolverContext {
+  loaders: ApiLoaders;
+}
 import { db, CACHE_TTL } from '../database/connection';
 
 export const transactionResolvers = {
   Query: {
     transactions: async (
-      parent: any,
+      parent: unknown,
       args: {
         pagination?: { first?: number; after?: string; last?: number; before?: string };
         timeRange?: { startTime?: string; endTime?: string };
@@ -16,9 +23,10 @@ export const transactionResolvers = {
           memoType?: string;
         };
       },
-      context: any,
-      info: GraphQLResolveInfo
+      _context: ResolverContext,
+      _info: GraphQLResolveInfo
     ) => {
+      const { first = 20, after, before } = args.pagination || {};
       if (args.pagination) {
         ValidationService.validatePagination(args.pagination);
       }
@@ -43,7 +51,7 @@ export const transactionResolvers = {
       }
 
       let whereClause = 'WHERE 1=1';
-      const params: any[] = [];
+      const params: unknown[] = [];
       let paramIndex = 1;
 
       if (startTime) {
@@ -75,7 +83,6 @@ export const transactionResolvers = {
         params.push(memoType);
       }
 
-      // Handle cursor pagination
       let cursorClause = '';
       if (after) {
         cursorClause = ` AND created_at < $${paramIndex++}`;
@@ -105,52 +112,27 @@ export const transactionResolvers = {
 
       const transactions = await db.query(query, params);
 
-      // Get total count
       const countQuery = `
         SELECT COUNT(*) as total
         FROM transactions 
         ${whereClause}
       `;
-      const countResult = await db.queryOne(countQuery, params.slice(0, -1));
-      const totalCount = parseInt(countResult.total);
+      const countResult = await db.queryOne<{ total: string }>(countQuery, params.slice(0, -1));
+      const totalCount = parseInt(countResult?.total ?? '0', 10);
 
-      // Create edges
-      const edges = transactions.map((tx, index) => ({
+      const edges = transactions.map((tx) => ({
         cursor: tx.paging_token,
-        node: {
-          ...tx,
-          createdAt: tx.created_at,
-          sourceAccount: tx.source_account,
-          sourceAccountSequence: tx.source_account_sequence,
-          feeAccount: tx.fee_account,
-          feeCharged: tx.fee_charged,
-          maxFee: tx.max_fee,
-          operationCount: tx.operation_count,
-          envelopeXdr: tx.envelope_xdr,
-          resultXdr: tx.result_xdr,
-          resultMetaXdr: tx.result_meta_xdr,
-          feeMetaXdr: tx.fee_meta_xdr,
-          memoType: tx.memo_type,
-          validAfter: tx.valid_after,
-          validBefore: tx.valid_before,
-          feeBumpTransaction: tx.fee_bump_transaction,
-          innerTransactionHash: tx.inner_transaction_hash,
-          innerTransactionSignatures: tx.inner_transaction_signatures,
-        },
+        node: mapTransaction(tx),
       }));
 
-      // Create page info
       const startCursor = edges.length > 0 ? edges[0].cursor : null;
       const endCursor = edges.length > 0 ? edges[edges.length - 1].cursor : null;
-      
-      const hasNextPage = edges.length === limit;
-      const hasPreviousPage = after ? true : false;
 
       const result = {
         edges,
         pageInfo: {
-          hasNextPage,
-          hasPreviousPage,
+          hasNextPage: edges.length === limit,
+          hasPreviousPage: Boolean(after),
           startCursor,
           endCursor,
         },
@@ -164,11 +146,13 @@ export const transactionResolvers = {
     },
 
     transaction: async (
-      parent: any,
+      parent: unknown,
       args: { hash: string },
-      context: any,
-      info: GraphQLResolveInfo
+      context: ResolverContext,
+      _info: GraphQLResolveInfo
     ) => {
+      const transaction = await context.loaders.transactionLoader.load(args.hash);
+      return transaction ? mapTransaction(transaction) : null;
       const cacheKey = `transaction:${args.hash}`;
 
       // Try cache first
@@ -221,30 +205,13 @@ export const transactionResolvers = {
 
   Transaction: {
     operations: async (
-      parent: any,
-      args: any,
-      context: any,
-      info: GraphQLResolveInfo
+      parent: { hash: string },
+      _args: unknown,
+      context: ResolverContext,
+      _info: GraphQLResolveInfo
     ) => {
-      const operations = await db.query(
-        `SELECT 
-          id, paging_token, transaction_hash, transaction_successful,
-          type, created_at, source_account, ledger_sequence, operation_index, details
-        FROM operations 
-        WHERE transaction_hash = $1 
-        ORDER BY operation_index ASC`,
-        [parent.hash]
-      );
-
-      return operations.map(op => ({
-        ...op,
-        createdAt: op.created_at,
-        transactionHash: op.transaction_hash,
-        transactionSuccessful: op.transaction_successful,
-        sourceAccount: op.source_account,
-        ledgerSequence: op.ledger_sequence,
-        operationIndex: op.operation_index,
-      }));
+      const operations = await context.loaders.transactionOperationsLoader.load(parent.hash);
+      return operations.map((op) => mapOperation(op));
     },
   },
 };

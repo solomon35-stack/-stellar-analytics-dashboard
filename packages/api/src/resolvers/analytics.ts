@@ -1,21 +1,59 @@
 import { GraphQLResolveInfo } from 'graphql';
+import { db } from '../database/connection';
+import { buildCacheKey, cachedQuery } from '../database/cached-query';
+import { getStatsSummary } from '../services/stats-service';
+
+const NETWORK_METRICS_CACHE_TTL_SECONDS = Number(
+  process.env.NETWORK_METRICS_CACHE_TTL_SECONDS ?? 30
+);
 import { db, CACHE_TTL } from '../database/connection';
 
 export const analyticsResolvers = {
   Query: {
     networkMetrics: async (
-      parent: any,
+      parent: unknown,
       args: {
         timeRange?: { startTime?: string; endTime?: string };
       },
-      context: any,
-      info: GraphQLResolveInfo
+      _context: unknown,
+      _info: GraphQLResolveInfo
     ) => {
       if (args.timeRange) {
         ValidationService.validateTimeRange(args.timeRange);
       }
 
       const { startTime, endTime } = args.timeRange || {};
+      const cacheKey = buildCacheKey('network-metrics', { startTime, endTime });
+
+      const metrics = await cachedQuery(cacheKey, NETWORK_METRICS_CACHE_TTL_SECONDS, async () => {
+        let whereClause = 'WHERE 1=1';
+        const params: unknown[] = [];
+        let paramIndex = 1;
+
+        if (startTime) {
+          whereClause += ` AND timestamp >= $${paramIndex++}`;
+          params.push(startTime);
+        }
+        if (endTime) {
+          whereClause += ` AND timestamp <= $${paramIndex++}`;
+          params.push(endTime);
+        }
+
+        return db.query(
+          `
+          SELECT 
+            timestamp, ledger_count, transaction_count, operation_count,
+            active_accounts, total_volume, average_fee, success_rate
+          FROM network_metrics 
+          ${whereClause}
+          ORDER BY timestamp DESC
+          LIMIT 1000
+        `,
+          params
+        );
+      });
+
+      return metrics.map((metric) => ({
       const cacheKey = `networkMetrics:${startTime || 'all'}:${endTime || 'all'}`;
 
       // Try cache first
@@ -65,7 +103,7 @@ export const analyticsResolvers = {
     },
 
     assetMetrics: async (
-      parent: any,
+      parent: unknown,
       args: {
         pagination?: { first?: number; after?: string; last?: number; before?: string };
         filter?: {
@@ -75,8 +113,8 @@ export const analyticsResolvers = {
         };
         timeRange?: { startTime?: string; endTime?: string };
       },
-      context: any,
-      info: GraphQLResolveInfo
+      _context: unknown,
+      _info: GraphQLResolveInfo
     ) => {
       if (args.pagination) {
         ValidationService.validatePagination(args.pagination);
@@ -101,7 +139,7 @@ export const analyticsResolvers = {
       }
 
       let whereClause = 'WHERE 1=1';
-      const params: any[] = [];
+      const params: unknown[] = [];
       let paramIndex = 1;
 
       if (assetType) {
@@ -132,15 +170,23 @@ export const analyticsResolvers = {
           am.trades_24h, am.trades_7d, am.trades_30d,
           am.price_change_24h, am.market_cap, am.holders
         FROM assets a
-        LEFT JOIN asset_metrics am ON a.id = am.asset_id
+        LEFT JOIN LATERAL (
+          SELECT volume_24h, volume_7d, volume_30d, trades_24h, trades_7d, trades_30d,
+                 price_change_24h, market_cap, holders
+          FROM asset_metrics
+          WHERE asset_id = a.id
+          ORDER BY timestamp DESC
+          LIMIT 1
+        ) am ON TRUE
         ${whereClause}
-        ORDER BY a.id, am.timestamp DESC
+        ORDER BY a.id
         LIMIT $${paramIndex}
       `;
       params.push(first);
 
       const assets = await db.query(query, params);
 
+      return assets.map((asset) => ({
       const result = assets.map(asset => ({
         asset: {
           assetType: asset.asset_type,
@@ -154,7 +200,7 @@ export const analyticsResolvers = {
         trades24h: asset.trades_24h,
         trades7d: asset.trades_7d,
         trades30d: asset.trades_30d,
-        priceChange24h: parseFloat(asset.price_change_24h),
+        priceChange24h: parseFloat(asset.price_change_24h ?? '0'),
         marketCap: asset.market_cap,
         holders: asset.holders,
       }));
@@ -165,13 +211,13 @@ export const analyticsResolvers = {
     },
 
     accountMetrics: async (
-      parent: any,
+      parent: unknown,
       args: {
         accountId: string;
         timeRange?: { startTime?: string; endTime?: string };
       },
-      context: any,
-      info: GraphQLResolveInfo
+      _context: unknown,
+      _info: GraphQLResolveInfo
     ) => {
       ValidationService.validateAddress(args.accountId);
       if (args.timeRange) {
@@ -190,7 +236,7 @@ export const analyticsResolvers = {
       }
 
       let whereClause = 'WHERE account_id = $1';
-      const params: any[] = [accountId];
+      const params: unknown[] = [accountId];
       let paramIndex = 2;
 
       if (startTime) {
@@ -202,7 +248,8 @@ export const analyticsResolvers = {
         params.push(endTime);
       }
 
-      const query = `
+      const metrics = await db.query(
+        `
         SELECT 
           account_id, timestamp, balance_native, total_balance_usd,
           transaction_count_24h, transaction_count_7d, transaction_count_30d,
@@ -211,10 +258,11 @@ export const analyticsResolvers = {
         ${whereClause}
         ORDER BY timestamp DESC
         LIMIT 100
-      `;
+      `,
+        params
+      );
 
-      const metrics = await db.query(query, params);
-
+      return metrics.map((metric) => ({
       const result = metrics.map(metric => ({
         accountId: metric.account_id,
         balanceNative: metric.balance_native,
@@ -235,6 +283,11 @@ export const analyticsResolvers = {
     },
 
     stats: async (
+      parent: unknown,
+      args: unknown,
+      _context: unknown,
+      _info: GraphQLResolveInfo
+    ) => getStatsSummary(),
       parent: any,
       args: any,
       context: any,

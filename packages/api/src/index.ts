@@ -16,7 +16,8 @@ import depthLimit from 'graphql-depth-limit';
 import { typeDefs } from './schema/typeDefs';
 import { resolvers } from './resolvers';
 import { db } from './database/connection';
-import * as loaders from './loaders';
+import { createLoaders } from './loaders';
+import { formatQueryMetricsPrometheus, getQueryMetrics } from './database/query-monitor';
 import { RealtimePublisher } from './services/realtime-publisher';
 import { 
   checkSubscriptionRateLimit, 
@@ -108,6 +109,21 @@ class ApiServer {
       });
     });
 
+    // Metrics endpoint
+    this.app.get('/metrics', (_req, res) => {
+      res.set('Content-Type', 'text/plain');
+      res.send(
+        [
+          '# HELP graphql_server_status Status of the GraphQL server',
+          '# TYPE graphql_server_status gauge',
+          'graphql_server_status 1',
+          formatQueryMetricsPrometheus(),
+        ].join('\n')
+      );
+    });
+
+    this.app.get('/metrics/queries', (_req, res) => {
+      res.json(getQueryMetrics());
     this.app.get('/metrics', (req, res) => {
       res.set('Content-Type', 'text/plain');
       res.send([
@@ -195,6 +211,8 @@ class ApiServer {
           req,
           user,
           db,
+          loaders: createLoaders(),
+          logger: this.logger,
           loaders,
           logger,
           authService,
@@ -254,6 +272,14 @@ class ApiServer {
     useServer(
       {
         schema,
+        context: async () => ({
+          db,
+          loaders: createLoaders(),
+          logger: this.logger,
+        }),
+        onConnect: () => {
+          this.logger.info('WebSocket client connected');
+          return true;
         context: async (ctx: any, msg: any, args: any) => {
           const connectionParams = ctx?.connectionParams || {};
           const token = connectionParams?.token || msg?.payload?.headers?.authorization?.replace('Bearer ', '');

@@ -7,30 +7,30 @@ Monorepo scaffold for a Stellar blockchain analytics platform with a data pipeli
 ```text
 .
 +-- indexer/
-¶   +-- src/
-¶       +-- ingester.ts
-¶       +-- transformer.ts
-¶       +-- loader.ts
-¶       +-- websocket.ts
-¶       +-- index.ts
-¶       +-- database/schema.sql
+ù   +-- src/
+ù       +-- ingester.ts
+ù       +-- transformer.ts
+ù       +-- loader.ts
+ù       +-- websocket.ts
+ù       +-- index.ts
+ù       +-- database/schema.sql
 +-- api/
-¶   +-- src/
-¶       +-- schema.ts
-¶       +-- resolvers/
-¶       +-- index.ts
+ù   +-- src/
+ù       +-- schema.ts
+ù       +-- resolvers/
+ù       +-- index.ts
 +-- frontend/
-¶   +-- src/
-¶       +-- components/
-¶       +-- hooks/
-¶       +-- pages/
-¶       +-- App.tsx
-¶       +-- main.tsx
+ù   +-- src/
+ù       +-- components/
+ù       +-- hooks/
+ù       +-- pages/
+ù       +-- App.tsx
+ù       +-- main.tsx
 +-- shared/
-¶   +-- src/
-¶       +-- config/networks.ts
-¶       +-- types/
-¶       +-- utils/
+ù   +-- src/
+ù       +-- config/networks.ts
+ù       +-- types/
+ù       +-- utils/
 +-- docker-compose.yml
 +-- package.json
 +-- pnpm-workspace.yaml
@@ -64,6 +64,14 @@ pnpm install
 docker compose up -d postgres redis
 ```
 
+Backups are automated by the `postgres-backup` service when running full compose (`docker compose up -d`), and you can run backup operations manually:
+
+```bash
+pnpm backup:run
+pnpm backup:verify
+pnpm backup:health
+```
+
 3. Run services in separate terminals:
 
 ```bash
@@ -76,3 +84,22 @@ pnpm --filter @stellar-analytics/frontend dev
 
 - API GraphQL + playground: `http://localhost:4000/graphql`
 - Frontend (Vite): `http://localhost:5173`
+
+## Database Migrations
+
+Schema changes are managed with `node-pg-migrate`:
+
+```bash
+pnpm db:migrate
+pnpm db:migrate:down
+```
+
+See `docs/database-migrations.md` for the full migration workflow.
+
+## Query Performance
+
+Slow-query monitoring, DataLoader batching, Redis caching, and index review guidance are documented in `docs/query-performance.md`.
+
+## Backup and Disaster Recovery
+
+Backup/restore/PITR runbook is documented in `docs/backup-disaster-recovery.md`.
