@@ -234,10 +234,16 @@ pnpm --filter @stellar-analytics/shared build
 
 ### Schema Updates
 
-1. Update `packages/indexer/src/database/schema.sql`
-2. Create migration script if needed
-3. Update TypeScript types in shared package
-4. Test with development database
+1. Create a new migration:
+   ```bash
+   pnpm db:migrate:create describe_your_change
+   ```
+2. Implement `exports.up` and `exports.down` in `packages/indexer/migrations/`
+3. Update `packages/indexer/src/database/schema.sql` as a reference snapshot (optional)
+4. Update TypeScript types in shared package when needed
+5. Test migrate up/down locally before opening a PR
+
+See `docs/database-migrations.md` for rollback, CI, and production guidance.
 
 ### Testing Database Changes
 
@@ -247,7 +253,9 @@ docker-compose -f docker-compose.dev.yml down -v
 docker-compose -f docker-compose.dev.yml up -d
 
 # Run migrations
-pnpm --filter @stellar-analytics/indexer db:migrate
+pnpm db:migrate
+pnpm db:migrate:down
+pnpm db:migrate
 ```
 
 ## 🚀 Deployment

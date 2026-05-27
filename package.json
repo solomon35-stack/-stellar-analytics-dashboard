@@ -15,6 +15,13 @@
     "test": "pnpm -r --if-present test",
     "prepare": "husky install",
     "commitlint": "commitlint --edit \"$1\""
+    "backup:run": "docker compose run --rm -e RUN_ONCE=true postgres-backup",
+    "backup:verify": "docker compose run --rm postgres-backup /bin/sh /scripts/verify-latest-backup.sh",
+    "backup:health": "docker compose run --rm postgres-backup /bin/sh /scripts/check-backup-health.sh",
+    "db:migrate": "pnpm --filter @stellar-analytics/indexer db:migrate",
+    "db:migrate:down": "pnpm --filter @stellar-analytics/indexer db:migrate:down",
+    "db:migrate:create": "pnpm --filter @stellar-analytics/indexer db:migrate:create",
+    "db:explain": "sh scripts/database/analyze-query-plans.sh"
   },
   "devDependencies": {
     "@commitlint/cli": "^17.8.3",

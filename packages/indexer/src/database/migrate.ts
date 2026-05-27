@@ -1,29 +1,29 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { db } from './connection';
+import dotenv from 'dotenv';
+import { runMigrations, type MigrationDirection } from './migration-runner';
 
-async function runMigrations(): Promise<void> {
-  try {
-    console.log('Running database migrations...');
-    
-    // Read and execute schema.sql
-    const schemaPath = join(__dirname, 'schema.sql');
-    const schema = readFileSync(schemaPath, 'utf8');
-    
-    await db.query(schema);
-    
-    console.log('Database migrations completed successfully');
-  } catch (error) {
-    console.error('Error running migrations:', error);
-    process.exit(1);
-  }
+dotenv.config();
+
+function parseCliArgs(): { direction: MigrationDirection; count?: number } {
+  const args = process.argv.slice(2);
+  const direction: MigrationDirection = args.includes('--down') ? 'down' : 'up';
+  const countArg = args.find((arg) => arg.startsWith('--count='));
+  const count = countArg ? Number.parseInt(countArg.split('=')[1], 10) : undefined;
+
+  return { direction, count };
+}
+
+async function main(): Promise<void> {
+  const { direction, count } = parseCliArgs();
+  console.log(`Running database migrations (${direction})...`);
+  await runMigrations({ direction, count });
+  console.log('Database migrations completed successfully');
 }
 
 if (require.main === module) {
-  runMigrations()
+  main()
     .then(() => process.exit(0))
     .catch((error) => {
-      console.error(error);
+      console.error('Error running migrations:', error);
       process.exit(1);
     });
 }

@@ -10,7 +10,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const isProduction = process.env.NODE_ENV === "production";
 const schema = buildSchema(typeDefs);
+
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW = 60 * 1000;
+const RATE_LIMIT_MAX = 100;
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const record = rateLimitStore.get(ip);
+  if (!record || now > record.resetAt) {
+    rateLimitStore.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  if (record.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  record.count++;
+  return true;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of rateLimitStore) {
+    if (now > val.resetAt) rateLimitStore.delete(key);
+  }
+}, 60000);
 
 const playgroundHtml = `
 <!doctype html>
@@ -84,9 +110,22 @@ const playgroundHtml = `
 </html>
 `;
 
+app.use("/graphql", (req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (!checkRateLimit(ip)) {
+    res.status(429).json({ error: "Too many requests from this IP, please try again later." });
+    return;
+  }
+  next();
+});
+
 app.get("/graphql", async (req, res) => {
   const query = typeof req.query.query === "string" ? req.query.query : null;
   if (!query) {
+    if (isProduction) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
     res.status(200).type("html").send(playgroundHtml);
     return;
   }

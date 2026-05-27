@@ -281,10 +281,42 @@ export const typeDefs = gql`
     latestLedgerTime: DateTime!
   }
 
-  # Mutations (if needed for future features)
+  # Auth types
+  type User {
+    id: ID!
+    email: String!
+    name: String!
+    role: String!
+    createdAt: DateTime!
+  }
+
+  type AuthPayload {
+    user: User!
+    token: String!
+  }
+
+  type ApiKeyPayload {
+    apiKey: String!
+    user: User!
+  }
+
+  input RegisterInput {
+    email: String!
+    password: String!
+    name: String!
+  }
+
+  input LoginInput {
+    email: String!
+    password: String!
+  }
+
+  # Mutations
   type Mutation {
-    # Placeholder for future mutations
-    _empty: String
+    register(input: RegisterInput!): AuthPayload!
+    login(input: LoginInput!): AuthPayload!
+    generateApiKey: ApiKeyPayload!
+    revokeApiKey: Boolean!
   }
 
   # Subscriptions for real-time updates

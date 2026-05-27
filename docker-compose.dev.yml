@@ -13,6 +13,44 @@ services:
       - "5432:5432"
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
+      - ./backups/dev-wal:/var/lib/postgresql/wal_archive
+    command:
+      [
+        "postgres",
+        "-c",
+        "wal_level=replica",
+        "-c",
+        "archive_mode=on",
+        "-c",
+        "archive_timeout=60s",
+        "-c",
+        "archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f"
+      ]
+    networks:
+      - stellar-dev-network
+    restart: unless-stopped
+
+  postgres-backup:
+    image: postgres:15-alpine
+    container_name: stellar-analytics-postgres-backup-dev
+    depends_on:
+      - postgres
+    environment:
+      PGPASSWORD: stellar_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: stellar_analytics_dev
+      POSTGRES_USER: stellar_user
+      BACKUP_RETENTION_DAYS: 30
+      VERIFY_RESTORE: "true"
+      BACKUP_INTERVAL_SECONDS: 86400
+      BACKUP_OUTPUT_DIR: /backups/daily
+      BACKUP_ALERT_WEBHOOK: ""
+    volumes:
+      - ./scripts/backup:/scripts:ro
+      - ./backups/dev-postgres:/backups/daily
+      - ./backups/dev-wal:/backups/wal:ro
+    entrypoint: ["/bin/sh", "/scripts/run-postgres-backup.sh"]
     networks:
       - stellar-dev-network
     restart: unless-stopped
