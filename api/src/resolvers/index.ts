@@ -116,7 +116,7 @@ export const resolvers = {
     const interval = intervalMapper[timeframe] || '24 hours';
     
     const { rows } = await query(
-      "SELECT SUM(amount::numeric) as volume FROM payments WHERE asset = $1 AND created_at > NOW() - CAST($2 AS INTERVAL)",
+      "SELECT SUM(amount::numeric) as volume FROM payments WHERE asset = $1 AND created_at > NOW() - ($2::text)::interval",
       [assetCode, interval]
     );
 

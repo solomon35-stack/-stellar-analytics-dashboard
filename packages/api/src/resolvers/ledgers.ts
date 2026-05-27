@@ -1,14 +1,8 @@
 import { GraphQLResolveInfo } from 'graphql';
-import { db } from '../database/connection';
-import { Connection, Edge } from '@stellar-analytics/shared';
-import { mapLedger } from '../utils/mappers';
-import type { ApiLoaders } from '../loaders';
-
-interface ResolverContext {
-  loaders: ApiLoaders;
-}
 import { db, CACHE_TTL } from '../database/connection';
 import { Connection, Edge, PageInfo } from '@stellar-analytics/shared';
+import { mapLedger } from '../utils/mappers';
+import type { ApiLoaders } from '../loaders';
 
 export const ledgerResolvers = {
   Query: {
@@ -21,13 +15,6 @@ export const ledgerResolvers = {
       context: any,
       info: GraphQLResolveInfo
     ): Promise<Connection<any>> => {
-      if (args.pagination) {
-        ValidationService.validatePagination(args.pagination);
-      }
-      if (args.timeRange) {
-        ValidationService.validateTimeRange(args.timeRange);
-      }
-
       const { first = 20, after, last, before } = args.pagination || {};
       const { startTime, endTime } = args.timeRange || {};
 
@@ -122,11 +109,9 @@ export const ledgerResolvers = {
     ledger: async (
       parent: unknown,
       args: { sequence: number },
-      context: ResolverContext,
+      context: { loaders: ApiLoaders },
       _info: GraphQLResolveInfo
     ) => {
-      const ledger = await context.loaders.ledgerLoader.load(args.sequence);
-      return ledger ? mapLedger(ledger) : null;
       const cacheKey = `ledger:${args.sequence}`;
 
       // Try cache first
@@ -135,7 +120,7 @@ export const ledgerResolvers = {
         return cached;
       }
 
-      const ledger = await db.queryOne(
+      const ledgerData = await db.queryOne(
         `SELECT 
           id, sequence, successful_transaction_count, failed_transaction_count,
           operation_count, tx_set_operation_count, closed_at, total_coins,
@@ -145,24 +130,10 @@ export const ledgerResolvers = {
         [args.sequence]
       );
 
-      if (!ledger) return null;
+      if (!ledgerData) return null;
 
       const result = {
-        ...ledger,
-        closedAt: ledger.closed_at,
-        successfulTransactionCount: ledger.successful_transaction_count,
-        failedTransactionCount: ledger.failed_transaction_count,
-        operationCount: ledger.operation_count,
-        txSetOperationCount: ledger.tx_set_operation_count,
-        totalCoins: ledger.total_coins,
-        feePool: ledger.fee_pool,
-        baseFeeInStroops: ledger.base_fee_in_stroops,
-        baseReserveInStroops: ledger.base_reserve_in_stroops,
-        maxTxSetSize: ledger.max_tx_set_size,
-        protocolVersion: ledger.protocol_version,
-        headerXdr: ledger.header_xdr,
-        createdAt: ledger.created_at,
-        updatedAt: ledger.updated_at,
+        ...mapLedger(ledgerData)
       };
 
       // Cache the result
