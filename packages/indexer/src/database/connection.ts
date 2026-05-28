@@ -23,11 +23,16 @@ export class DatabaseConnection {
       ],
     });
 
+    // Make pool size configurable via environment variables (Issue #29)
+    const maxConnections = parseInt(process.env.DB_POOL_MAX || process.env.DB_MAX_CONNECTIONS || '20', 10);
+    const idleTimeout = parseInt(process.env.DB_POOL_IDLE_TIMEOUT || '30000', 10);
+    const connectionTimeout = parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT || '2000', 10);
+
     this.pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      max: maxConnections,
+      idleTimeoutMillis: idleTimeout,
+      connectionTimeoutMillis: connectionTimeout,
     });
 
     this.redis = createClient({
@@ -35,6 +40,7 @@ export class DatabaseConnection {
     });
 
     this.setupErrorHandling();
+    this.setupPoolMonitoring();
   }
 
   public static getInstance(): DatabaseConnection {
@@ -52,6 +58,45 @@ export class DatabaseConnection {
     this.redis.on('error', (err) => {
       this.logger.error('Redis client error:', err);
     });
+  }
+
+  // Issue #29 – Pool size monitoring with metrics endpoint
+  private setupPoolMonitoring(): void {
+    setInterval(() => {
+      const poolStats = {
+        total: this.pool.totalCount,
+        idle: this.pool.idleCount,
+        waiting: this.pool.waitingCount,
+      };
+      this.logger.info('Database pool stats:', poolStats);
+    }, 30000); // Log every 30 seconds
+
+    this.pool.on('connect', () => {
+      this.logger.debug('Database pool: new connection created');
+    });
+
+    this.pool.on('acquire', () => {
+      this.logger.debug('Database pool: connection acquired');
+    });
+
+    this.pool.on('release', () => {
+      this.logger.debug('Database pool: connection released');
+    });
+  }
+
+  // Issue #29 – Get pool stats for monitoring
+  public getPoolStats(): {
+    total: number;
+    idle: number;
+    waiting: number;
+    max: number;
+  } {
+    return {
+      total: this.pool.totalCount,
+      idle: this.pool.idleCount,
+      waiting: this.pool.waitingCount,
+      max: this.pool.options.max,
+    };
   }
 
   public async connect(): Promise<void> {
