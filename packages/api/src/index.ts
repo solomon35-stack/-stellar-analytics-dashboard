@@ -18,6 +18,7 @@ import { resolvers } from './resolvers';
 import { db } from './database/connection';
 import { createLoaders } from './loaders';
 import { formatQueryMetricsPrometheus, getQueryMetrics } from './database/query-monitor';
+import type { HealthCheckResult } from './database/connection';
 import { RealtimePublisher } from './services/realtime-publisher';
 import { 
   checkSubscriptionRateLimit, 
@@ -77,10 +78,6 @@ class ApiServer {
 
     this.app.use(compression());
 
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    const logger = this.logger;
-
     const limiter = rateLimit({
       windowMs: 60 * 1000,
       max: 1000,
@@ -100,16 +97,22 @@ class ApiServer {
     });
     this.app.use('/graphql', limiter);
 
-    this.app.get('/health', (req, res) => {
-      res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        environment: isProduction ? 'production' : 'development',
-      });
+    this.app.get('/health', async (_req, res) => {
+      try {
+        const health: HealthCheckResult = await db.healthCheck();
+        const statusCode = health.status === 'unhealthy' ? 503
+          : health.status === 'degraded' ? 200
+          : 200;
+        res.status(statusCode).json(health);
+      } catch (error: any) {
+        res.status(503).json({
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          error: error?.message ?? 'Health check failed',
+        });
+      }
     });
 
-    // Metrics endpoint
     this.app.get('/metrics', (_req, res) => {
       res.set('Content-Type', 'text/plain');
       res.send(
@@ -124,16 +127,6 @@ class ApiServer {
 
     this.app.get('/metrics/queries', (_req, res) => {
       res.json(getQueryMetrics());
-    this.app.get('/metrics', (req, res) => {
-      res.set('Content-Type', 'text/plain');
-      res.send([
-        '# HELP graphql_server_status Status of the GraphQL server',
-        '# TYPE graphql_server_status gauge',
-        'graphql_server_status 1',
-        '# HELP graphql_requests_total Total number of GraphQL requests',
-        '# TYPE graphql_requests_total counter',
-        'graphql_requests_total 0',
-      ].join('\n'));
     });
   }
 

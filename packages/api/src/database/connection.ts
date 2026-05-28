@@ -1,7 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { createClient } from 'redis';
 import winston from 'winston';
-import { recordQueryExecution } from './query-monitor';
+import { recordQueryExecution, getQueryMetrics } from './query-monitor';
 
 // Cache TTL constants (in seconds)
 export const CACHE_TTL = {
@@ -10,6 +10,40 @@ export const CACHE_TTL = {
   ACCOUNT_STATS: 300,
   ASSET_DATA: 300,
 } as const;
+
+export interface PoolStats {
+  total: number;
+  idle: number;
+  waiting: number;
+  max: number;
+}
+
+export interface HealthCheckResult {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  postgres: {
+    status: 'connected' | 'disconnected' | 'error';
+    latencyMs: number;
+    poolStats: PoolStats;
+  };
+  redis: {
+    status: 'connected' | 'disconnected' | 'error';
+    latencyMs: number;
+  };
+  database: {
+    sizeBytes: number;
+    sizeFormatted: string;
+  };
+  replication: {
+    isReplica: boolean;
+    lagMs: number | null;
+  };
+  queryMetrics: {
+    totalQueries: number;
+    slowQueries: number;
+    averageDurationMs: number;
+  };
+  timestamp: string;
+}
 
 export class DatabaseConnection {
   private static instance: DatabaseConnection;
@@ -172,6 +206,150 @@ export class DatabaseConnection {
     const key = `cache:${metric}:${today}`;
     const value = await this.redis.get(key);
     return value ? parseInt(value) : 0;
+  }
+
+  public async healthCheck(): Promise<HealthCheckResult> {
+    const pgResult = await this.checkPostgresHealth();
+    const redisResult = await this.checkRedisHealth();
+    const dbSize = await this.getDatabaseSize();
+    const replLag = await this.getReplicationLag();
+    const queryMetrics = await this.getQueryMetricsSnapshot();
+
+    let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+
+    if (pgResult.status === 'error' || redisResult.status === 'error') {
+      status = 'unhealthy';
+    } else if (pgResult.latencyMs > 500 || redisResult.latencyMs > 100) {
+      status = 'degraded';
+    }
+
+    return {
+      status,
+      postgres: {
+        status: pgResult.status,
+        latencyMs: pgResult.latencyMs,
+        poolStats: pgResult.poolStats,
+      },
+      redis: {
+        status: redisResult.status,
+        latencyMs: redisResult.latencyMs,
+      },
+      database: dbSize,
+      replication: replLag,
+      queryMetrics,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async checkPostgresHealth(): Promise<{
+    status: 'connected' | 'disconnected' | 'error';
+    latencyMs: number;
+    poolStats: PoolStats;
+  }> {
+    const start = performance.now();
+    try {
+      await this.pool.query('SELECT 1 AS health_check');
+      const latencyMs = Math.round((performance.now() - start) * 100) / 100;
+      return {
+        status: 'connected',
+        latencyMs,
+        poolStats: {
+          total: this.pool.totalCount,
+          idle: this.pool.idleCount,
+          waiting: this.pool.waitingCount,
+          max: 20,
+        },
+      };
+    } catch {
+      return {
+        status: 'error',
+        latencyMs: Math.round((performance.now() - start) * 100) / 100,
+        poolStats: {
+          total: this.pool.totalCount,
+          idle: this.pool.idleCount,
+          waiting: this.pool.waitingCount,
+          max: 20,
+        },
+      };
+    }
+  }
+
+  private async checkRedisHealth(): Promise<{
+    status: 'connected' | 'disconnected' | 'error';
+    latencyMs: number;
+  }> {
+    const start = performance.now();
+    try {
+      await this.redis.ping();
+      const latencyMs = Math.round((performance.now() - start) * 100) / 100;
+      return { status: 'connected', latencyMs };
+    } catch {
+      return {
+        status: 'error',
+        latencyMs: Math.round((performance.now() - start) * 100) / 100,
+      };
+    }
+  }
+
+  private async getDatabaseSize(): Promise<{
+    sizeBytes: number;
+    sizeFormatted: string;
+  }> {
+    try {
+      const result = await this.pool.query(`
+        SELECT pg_database_size(current_database()) AS size_bytes
+      `);
+      const sizeBytes = parseInt(result.rows[0]?.size_bytes ?? '0', 10);
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let size = sizeBytes;
+      let unitIndex = 0;
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+      }
+      return {
+        sizeBytes,
+        sizeFormatted: `${Math.round(size * 100) / 100} ${units[unitIndex]}`,
+      };
+    } catch {
+      return { sizeBytes: 0, sizeFormatted: 'unknown' };
+    }
+  }
+
+  private async getReplicationLag(): Promise<{
+    isReplica: boolean;
+    lagMs: number | null;
+  }> {
+    try {
+      const result = await this.pool.query(
+        `SELECT
+          CASE WHEN pg_is_in_recovery() THEN true ELSE false END AS is_replica,
+          COALESCE(
+            EXTRACT(EPOCH FROM (pg_last_wal_receive_lsn() - pg_last_wal_replay_lsn())) * 1000,
+            0
+          ) AS lag_ms`
+      );
+      const row = result.rows[0] ?? { is_replica: false, lag_ms: 0 };
+      return {
+        isReplica: row.is_replica,
+        lagMs: row.is_replica ? Number(row.lag_ms) : null,
+      };
+    } catch {
+      return { isReplica: false, lagMs: null };
+    }
+  }
+
+  private async getQueryMetricsSnapshot(): Promise<{
+    totalQueries: number;
+    slowQueries: number;
+    averageDurationMs: number;
+  }> {
+    const metrics = getQueryMetrics();
+    return {
+      totalQueries: metrics.totalQueries,
+      slowQueries: metrics.slowQueries,
+      averageDurationMs: metrics.averageDurationMs,
+    };
   }
 }
 
